@@ -97,15 +97,117 @@ engine. Blanking is not an acceptable outcome, and neither is leaving it ungated
 
 ### E0 — measure (no code change)
 
-On a real collection per engine, read the `cohesion_score` and
-`tag_distribution` coverage of every bin cluster through the API
-(`/api/bin_cluster/...` listing; no direct Kvrocks reads) and record:
+Measured on a fresh worktree stack (`scripts/wt-setup.sh`) against a real
+corpus: 60 binaries from `~/data/versioned_c/bin` (v01-v10 across arm, linux
+x64, ppc, riscv, win32, win64 -- the same small C program cross-compiled and
+recompiled 10 times, so the corpus has genuine version drift but only one
+program family). Uploaded via `bsimvis upload ... --enable boilerplate` so
+member files carry a real tag axis (`boilerplate:runtime`, the cheap
+symbol-name tagger) instead of an empty `tag_distribution`. Binary similarity
+and clustering ran through the normal upload -> lane pipeline
+(BUILD_SIM -> CLUSTER_FUNCTIONS -> BUILD_BIN_SIM -> CLUSTER_BINARIES), default
+config (`bin_engine = "threshold_uf"`, `bin_uf_threshold = 0.1`).
 
-- cohesion histogram per engine
-- how many clusters, and how many member files, would keep inferred tags at
-  cohesion floors 0.3 / 0.5 / 0.7 crossed with coverage floors 0.3 / 0.5 / 0.7
+**Only `threshold_uf` was measured.** Getting one engine through a full
+Ghidra-analyze-then-cluster cycle on this stack took the whole time budget;
+`hierarchical_uf`/`hierarchical_snn` were not run. Everything below is
+threshold_uf only -- no numbers are given for the hierarchical engines.
 
-Result goes into this file as a table and picks the defaults.
+**A storage bug blocked reading `tag_distribution` from the listing API
+directly.** `/api/bin_cluster/list` and `/api/bin_cluster/members` returned
+the right `cohesion_score` and member counts, but every other field
+(`tag_distribution`, `yara_distribution`, `filename_distribution`,
+`function_count_stats`, `sample_members` names) came back empty for both
+clusters. Root cause, traced by reading the code (not by direct Kvrocks
+access): `BinClusterService._incremental_cluster_binaries` gets its file list
+from `_batch_files`, which reads `{collection}:batch:{batch_uuid}:files` --
+already-full file ids (`{collection}:file:{md5}`). Those ids flow unchanged
+into the union-find and become the `members` set persisted per cluster.
+`_enrich_and_persist_binary_clusters` then fetches member metadata with
+`f"{collection}:file:{file_id}:meta"`, i.e. it expects a bare md5 and
+double-prefixes every full id it's actually given
+(`e0v2:file:e0v2:file:<md5>:meta`, which never exists). `cohesion_score` is
+unaffected because `_node_cohesion` reads bin-sim score keys directly, not
+member metas. This is a real, independent bug in the threshold_uf path (not
+part of plan E, not fixed here per E0's "no code change" scope) and should be
+filed separately -- it means **every threshold_uf collection on this branch
+has blank distributions in its stored bin_cluster meta today**, regardless of
+the inferred-tag gate.
+
+To still get a faithful coverage measurement, this file's numbers were
+recomputed with the real, unmodified `cluster_utils.cluster_summary` /
+`inferred_tag_values` functions, fed with: real member id lists from
+`/api/bin_cluster/members`, real per-file `tags` from `/api/file/search`, and
+the real `cohesion_score` from `/api/bin_cluster/list` -- every input is API
+data, only the aggregation step (which the server already runs, just can't
+currently read back) was replayed locally instead of read pre-stored.
+
+**Cohesion histogram (threshold_uf, 2 clusters, 60 members, all real):**
+
+| Bucket | Clusters | Members |
+|---|---|---|
+| 0.4-0.5 | 1 | 40 |
+| 0.5-0.6 | 1 | 20 |
+
+Cluster 1 (0.4207 cohesion, 40 members: every arm/linux/ppc/riscv build across
+all 10 versions) and cluster 2 (0.5755 cohesion, 20 members: both win32 and
+win64 builds). This directly confirms the claim at `bin_cluster_service.py:514`
+on real data: the larger, still-legitimate threshold_uf cluster sits at 0.42,
+"well under" a 0.5 floor, even on a clean corpus with no adversarial or
+unrelated files forced together.
+
+`tag_distribution` (`boilerplate:runtime`, the only axis this corpus
+produces): cluster 1 coverage 0.75 (30/40 members tagged -- riscv/ppc symbol
+tables are sparser, ~1/6 of members carry no boilerplate hit), cluster 2
+coverage 1.0 (20/20).
+
+**3x3 grid (cohesion floor x coverage floor -> clusters kept / members kept,
+of 2 clusters / 60 members):**
+
+| cohesion \ coverage | >=0.3 | >=0.5 | >=0.7 |
+|---|---|---|---|
+| >=0.3 | 2 / 60 | 2 / 60 | 2 / 60 |
+| >=0.5 | 1 / 20 | 1 / 20 | 1 / 20 |
+| >=0.7 | 0 / 0 | 0 / 0 | 0 / 0 |
+
+Coverage never binds in this corpus (both real coverage values, 0.75 and 1.0,
+clear every tested floor) because `boilerplate:runtime` is a coarse,
+near-universal tag once rolled up to file level (see the bug note above:
+`tag_taxonomy.origin_parent` deliberately collapses the full
+`boilerplate:runtime:<libc>:<phase>` tag to just `boilerplate:runtime` at
+file scope, so there is only ever one node per axis here -- a messier axis
+like `av:` family tags would show real coverage spread; this corpus doesn't
+have one). Cohesion is what actually gates: at the plan's fallback default
+(0.5), the 40-member cluster -- two-thirds of this corpus's files -- loses
+its inferred tags entirely, while the 20-member cluster keeps them. At 0.7,
+both clusters are blanked.
+
+**Caveats on this measurement:** n=2 clusters from a single homogeneous
+program family is thin evidence for a histogram; it cannot show what a
+messier, multi-family collection's cohesion spread looks like, and the
+coverage axis was never actually tested by anything other than a uniform
+tag. Treat the shape of the histogram as illustrative, but treat "a
+real threshold_uf cluster measured well under 0.5 cohesion" as confirmed,
+not hypothetical -- that was the specific, narrow thing E0 was gated on.
+
+**Defaults picked:**
+
+- `clustering.inferred_min_coverage = 0.5` -- keep the plan's default. Nothing
+  in this measurement argues for changing it: it never bound here, and 0.5 is
+  still the right "majority, not a plurality" bar for when a real spread
+  shows up.
+- `clustering.inferred_min_cohesion` -- keep the plan's fallback (0.5) as the
+  *general* default, but add the per-engine override the Open Question
+  proposed: **`clustering.inferred_min_cohesion_threshold_uf = 0.3`.** Reasoning:
+  this measurement reproduces, on real data, exactly the blanking risk the
+  Open Question warned about -- a 0.5 floor silently drops inferred tags from
+  the majority of files in the default engine's most common cluster shape (a
+  large, low-but-nonzero-threshold union-find merge). 0.3 still rejects a
+  cluster with no real cohesion (a pure coincidental union), but stops
+  penalizing threshold_uf specifically for being a lower, transitive-closure
+  threshold by construction (`bin_uf_threshold = 0.1`) rather than a direct
+  pairwise floor. `hierarchical_uf`/`hierarchical_snn` are unmeasured and keep
+  the plain 0.5 fallback until someone runs the equivalent pass for them.
 
 ### E1 — gate function and namespace policy
 
