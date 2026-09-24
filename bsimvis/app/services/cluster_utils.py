@@ -275,14 +275,68 @@ def cluster_summary(metas, member_count=None, fields=DISTRIBUTION_FIELDS):
     return result
 
 
-def inferred_tag_values(summary):
-    """Top derived tag per axis, kept separate from analyst-evidence tags."""
-    return [
-        f"inferred:{item['tag_id']}"
-        for distribution in (summary.get("tag_distribution") or {}).values()
-        for item in distribution[:1]
-        if item.get("tag_id")
-    ]
+def inferred_tag_values(summary, cohesion, min_cohesion, min_coverage):
+    """Deepest tag per axis the cluster's members actually support.
+
+    Empty below `min_cohesion` -- a low-cohesion cluster's majority tag is
+    coincidence, not a shared trait. Above it, each axis starts at its top
+    root and walks down while a child's coverage still clears `min_coverage`,
+    so a label never claims more specificity than the members carry. Every
+    writer (threshold, hierarchical, pool) calls this one function; see
+    Decisions 1 and 3 in plan_e_inferred_tag_gate.md.
+
+    `build_tag_distribution` roots every axis at the bare namespace token
+    (e.g. `av`), which is never itself a member value -- `tag_policy` requires
+    a colon to resolve a real policy, so the token that has none never enters
+    `counts` and its node sits at count 0. That placeholder is skipped before
+    the coverage floor is applied, or every gated axis would read 0% and
+    blank unconditionally.
+    """
+    if cohesion is None or cohesion < min_cohesion:
+        return []
+    out = []
+    for distribution in (summary.get("tag_distribution") or {}).values():
+        if not distribution:
+            continue
+        node = distribution[0]
+        while node is not None and not node.get("count"):
+            children = node.get("children") or []
+            node = max(children, key=lambda c: c.get("coverage", 0.0), default=None)
+        if node is None or node.get("coverage", 0.0) < min_coverage:
+            continue
+        best = node
+        children = node.get("children") or []
+        while children:
+            candidate = max(children, key=lambda c: c.get("coverage", 0.0))
+            if candidate.get("coverage", 0.0) < min_coverage:
+                break
+            best = candidate
+            children = best.get("children") or []
+        if best.get("tag_id"):
+            out.append(f"inferred:{best['tag_id']}")
+    return out
+
+
+def resolve_hierarchical_inferred_tags(leaf_to_clusters, idx_to_id, gated_by_label):
+    """Per-file inferred tags for a hierarchical tree (Decision 4).
+
+    `leaf_to_clusters` maps each leaf to its surviving ancestors ordered
+    deepest-first (`cluster_common.hierarchical_membership`'s shape).
+    `gated_by_label` is {cluster_id: gated inferred-tag list}, already run
+    through `inferred_tag_values` -- an empty list means that cluster failed
+    the gate. A file takes the first (most specific) ancestor that passed,
+    never a union of the tree it survives into.
+    """
+    resolved = {}
+    for leaf, clusters in leaf_to_clusters.items():
+        tags = []
+        for c in clusters:
+            gated = gated_by_label.get(c)
+            if gated:
+                tags = gated
+                break
+        resolved[idx_to_id[leaf]] = tags
+    return resolved
 
 
 def function_count_stats(metas):
@@ -478,10 +532,10 @@ def fetch_bin_cluster_meta_all_axes(
         cm = parsed_meta.get((axis, ns, cid))
         if not cm:
             continue
-        
+
         # Copy to avoid mutating shared dict if we inject axis
         # But wait, axis is the same for the same (axis, ns, cid)
-        
+
         uuid = cm.get("cluster_uuid") or cid
         cm["axis"] = axis
         meta_by_uuid[uuid] = cm
@@ -540,6 +594,47 @@ def demo():
     assert metas["bbbb"]["cluster_name"] == "zip-cluster", metas
     assert metas["aaaa"]["cluster_name"] == "elf-cluster", metas
     assert bin_cluster_ns("x", True) == "x:container"
+
+    # inferred_tag_values: gated out below cohesion.
+    summary = cluster_summary([{"tags": ["av:clamav:mirai"]}] * 10, member_count=10)
+    assert inferred_tag_values(summary, 0.4, 0.5, 0.5) == []
+
+    # Gated out below coverage: only 3/10 members carry the tag.
+    metas = [{"tags": ["av:clamav:mirai"]}] * 3 + [{}] * 7
+    summary = cluster_summary(metas, member_count=10)
+    assert inferred_tag_values(summary, 0.9, 0.5, 0.5) == []
+
+    # Deepest passing node chosen: root at 100%, its child at 60% (>= floor).
+    metas = [{"tags": ["av:clamav:mirai"]}] * 6 + [{"tags": ["av:clamav"]}] * 4
+    summary = cluster_summary(metas, member_count=10)
+    assert inferred_tag_values(summary, 0.9, 0.5, 0.5) == ["inferred:av:clamav:mirai"]
+
+    # Same shape, but the child falls under the floor -- root wins instead.
+    metas = [{"tags": ["av:clamav:mirai"]}] * 3 + [{"tags": ["av:clamav"]}] * 7
+    summary = cluster_summary(metas, member_count=10)
+    assert inferred_tag_values(summary, 0.9, 0.5, 0.5) == ["inferred:av:clamav"]
+
+    # One member per prefix counted once: a single member with two leaf tags
+    # sharing an ancestor ("av:clamav") contributes 1 to that ancestor, not 2.
+    metas = [{"tags": ["av:clamav:mirai", "av:clamav:gafgyt"]}]
+    summary = cluster_summary(metas, member_count=1)
+    root = summary["tag_distribution"]["family"][0]
+    assert root["tag_id"] == "av" and root["count"] == 0, root
+    shared = root["children"][0]
+    assert shared["tag_id"] == "av:clamav" and shared["count"] == 1, shared
+    assert len(shared["children"]) == 2, shared["children"]
+
+    # resolve_hierarchical_inferred_tags: most specific passing cluster wins,
+    # never a union of the ancestors a leaf survives into.
+    resolved = resolve_hierarchical_inferred_tags(
+        leaf_to_clusters={0: [20, 10], 1: [10]},
+        idx_to_id={0: "fileA", 1: "fileB"},
+        gated_by_label={20: [], 10: ["inferred:av:clamav"]},
+    )
+    assert resolved == {
+        "fileA": ["inferred:av:clamav"],
+        "fileB": ["inferred:av:clamav"],
+    }, resolved
 
     print("cluster_utils demo OK")
 

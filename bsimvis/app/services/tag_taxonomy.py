@@ -113,6 +113,11 @@ NAMESPACE_POLICY = {
     "ip": Policy(
         "ioc", vocabulary=False, aggregate=False, writers=("import", "analysis", "user")
     ),
+    # Derived from a binary cluster's own members, never accepted from a
+    # writer -- empty `writers` means every `filter_tags` boundary drops it.
+    # The clustering code that mints `inferred:*` writes straight to the
+    # `inferred_tags` index and never calls `filter_tags`, so it is unaffected.
+    "inferred": Policy("inferred", vocabulary=False, aggregate=False, writers=()),
 }
 USER_POLICY = Policy("user", vocabulary=True, aggregate=True, writers=("user",))
 DEFAULT_POLICY = Policy("user")
@@ -1337,6 +1342,10 @@ def demo():
         "fid:libc",
         "unknown:value",
     ]
+    # `inferred:*` is written straight to its own index, never through
+    # filter_tags -- but if any writer boundary ever sees one, it is dropped.
+    for writer in ("import", "analysis", "user", "rulezet"):
+        assert filter_tags(["inferred:av:x"], writer) == []
     assert migrate_tag("flag:suspicious:crypto") == [
         "severity:medium",
         "category:crypto:cipher",

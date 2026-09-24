@@ -13,6 +13,7 @@ from bsimvis.app.services.cluster_utils import (
     default_bin_cluster_name,
     function_count_stats,
     inferred_tag_values,
+    resolve_hierarchical_inferred_tags,
 )
 
 _EMPTY_I = np.empty(0, dtype=np.int32)
@@ -24,23 +25,37 @@ except ImportError:
     hdbscan = None
 
 
-def _store_inferred_tags(pipe, collection, members, member_metas, values):
-    values = sorted(set(values))
-    if not values:
-        return
-    for file_id, meta in zip(members, member_metas):
-        old = set(meta.get("inferred_tags") or [])
-        meta["inferred_tags"] = sorted(old | set(values))
+def _store_inferred_tags(pipe, collection, member_metas_by_id, resolved):
+    """Replace, never union, each file's gated inferred_tags (Decision 5).
+
+    member_metas_by_id: {file_id: meta dict}, mutated in place.
+    resolved: {file_id: [inferred:... , ...]} -- already gated; a file absent
+    or mapped to [] has its inferred tags cleared, not left stale (issue #4,
+    plan_e_inferred_tag_gate.md) -- a re-cluster that drops a file's old
+    cluster must drop its old labels too.
+    """
+    from bsimvis.app.services.index_service import _index_tag, _unindex_tag
+
+    n = 0
+    for file_id, meta in member_metas_by_id.items():
+        values = sorted(set(resolved.get(file_id) or []))
+        old = meta.get("inferred_tags") or []
+        if set(old) == set(values):
+            continue
         full_id = (
             file_id
             if str(file_id).startswith(f"{collection}:file:")
             else f"{collection}:file:{file_id}"
         )
+        _unindex_tag(
+            pipe, collection, "file", "inferred_tags", old, file_id, remaining=values
+        )
+        meta["inferred_tags"] = values
         pipe.set(f"{full_id}:meta", json.dumps(meta))
-    for value in values:
-        bucket_key = f"{collection}:idx:file:inferred_tags:{value.lower()}"
-        pipe.sadd(bucket_key, *members)
-        pipe.sadd(f"{collection}:reg:file:inferred_tags", bucket_key)
+        _index_tag(pipe, collection, "file", "inferred_tags", values, file_id)
+        n += 1
+        if n % 500 == 0:
+            pipe.execute()
 
 
 class BinClusterService:
@@ -511,11 +526,15 @@ class BinClusterService:
                         pass
                 all_member_meta[file_id] = m
 
-        # ponytail: unlike the hierarchical path, min_cohesion does NOT gate
-        # inferred-metadata indexing here -- at the default bin_uf_threshold
-        # of 0.1 a threshold cut's average pair sits well under min_cohesion,
-        # so gating would blank almost every inferred tag. Cohesion is
-        # reported honestly; wiring the gate is a separate call.
+        from bsimvis.app.services.config_service import config_service
+
+        inferred_min_cohesion = config_service.get(
+            "clustering.inferred_min_cohesion", min_cohesion
+        )
+        inferred_min_coverage = config_service.get(
+            "clustering.inferred_min_coverage", 0.5
+        )
+
         # Same read budget the hierarchical path uses, spread over the
         # clusters this call writes.
         score_key = sim_score_key
@@ -571,6 +590,9 @@ class BinClusterService:
             )
 
             set_tag_distribution_score(summary["tag_distribution"], cohesion_score)
+            gated_inferred_tags = inferred_tag_values(
+                summary, cohesion_score, inferred_min_cohesion, inferred_min_coverage
+            )
             sample_members = []
             for file_id in members[:5]:
                 m = all_member_meta.get(file_id, {})
@@ -593,6 +615,7 @@ class BinClusterService:
                 "cluster_name": default_name,
                 "cohesion_score": float(cohesion_score),
                 "cohesion_exact": bool(cohesion_exact),
+                "inferred_tags": gated_inferred_tags,
                 "avg_stability": 1.0,
                 "cluster_stability": 1.0,
                 "member_count": len(members),
@@ -634,7 +657,10 @@ class BinClusterService:
             pipe.sadd(f"{collection}:reg:file:bin_cluster_uuid", bucket_key_uuid)
 
             _store_inferred_tags(
-                pipe, collection, members, member_metas, inferred_tag_values(summary)
+                pipe,
+                collection,
+                dict(zip(members, member_metas)),
+                {fid: gated_inferred_tags for fid in members},
             )
 
             inferred_mapping = {
@@ -1578,6 +1604,15 @@ class BinClusterService:
         if sim_score_key is None:
             sim_score_key = f"{collection}:bin_sim:score:{algo}"
 
+        from bsimvis.app.services.config_service import config_service
+
+        inferred_min_cohesion = config_service.get(
+            "clustering.inferred_min_cohesion", min_cohesion
+        )
+        inferred_min_coverage = config_service.get(
+            "clustering.inferred_min_coverage", 0.5
+        )
+
         label_key = (lambda label: f"c{label}") if node_type == "container" else str
 
         # 4. Extract Condensed Tree for UI
@@ -1665,6 +1700,7 @@ class BinClusterService:
             if f.startswith("bin_cluster_")
         ]
 
+        retired_member_ids = set()
         if only_nodes is not None:
             inferred_fields = {
                 "yara_distribution": "inferred_yara",
@@ -1681,6 +1717,12 @@ class BinClusterService:
                         f"{collection}:bin_cluster:{algo_ns}:{c}:members"
                     )
                 ]
+                if c in retired_nodes:
+                    # This cluster no longer exists in the rebuilt tree, so
+                    # its members need a fresh Decision-4 walk against
+                    # whatever ancestor survives -- captured here because the
+                    # :members set this reads is deleted below.
+                    retired_member_ids.update(members)
                 raw = r.get(f"{collection}:bin_cluster:{algo_ns}:{c}:meta")
                 old_meta = json.loads(raw) if raw else {}
                 for member in members:
@@ -1802,6 +1844,7 @@ class BinClusterService:
 
         all_member_file_ids = sorted(
             {fid for c in write_nodes for fid in cluster_members[c]}
+            | retired_member_ids
         )
         all_member_meta = {}
         total_members = len(all_member_file_ids)
@@ -1851,6 +1894,10 @@ class BinClusterService:
                 f"Enriching metadata for {total_clusters} hierarchical binary clusters...",
             )
 
+        # Gated inferred tags per cluster (Decision 6) -- resolved per file
+        # after this loop, once every touched cluster's gate result is known.
+        gated_by_label = {}
+
         for idx, label in enumerate(write_nodes):
             members = cluster_members[label]
             member_metas = [all_member_meta.get(file_id, {}) for file_id in members]
@@ -1887,6 +1934,10 @@ class BinClusterService:
             else:
                 cohesion_score = 1.0
             set_tag_distribution_score(summary["tag_distribution"], cohesion_score)
+            gated_inferred_tags = inferred_tag_values(
+                summary, cohesion_score, inferred_min_cohesion, inferred_min_coverage
+            )
+            gated_by_label[label] = gated_inferred_tags
 
             sample_members = []
             for file_id in members[:5]:
@@ -1934,6 +1985,7 @@ class BinClusterService:
                 ],
                 "batch_uuid_distribution": summary["batch_uuid_distribution"],
                 "function_count_stats": function_count_stats(member_metas),
+                "inferred_tags": gated_inferred_tags,
                 "created_at": int(time.time() * 1000),
             }
 
@@ -1951,10 +2003,6 @@ class BinClusterService:
                 )
                 pipe.sadd(bucket_key, *members)
                 pipe.sadd(f"{collection}:reg:file:bin_cluster_name", bucket_key)
-
-            _store_inferred_tags(
-                pipe, collection, members, member_metas, inferred_tag_values(summary)
-            )
 
             # Keep legacy inferred indexes for compatibility; inferred_tags is the
             # isolated, namespace-aware representation used by new consumers.
@@ -1985,6 +2033,44 @@ class BinClusterService:
                     f"Enriching binary clusters: {idx + 1}/{total_clusters}",
                 )
 
+        pipe.execute()
+
+        # Decision 4: resolve each touched or orphaned file against the tree
+        # it survives into, most-specific passing ancestor wins. Untouched
+        # clusters' gated lists come off their own :meta -- Decision 6 -- so a
+        # file landing on an ancestor this run didn't recompute still gets
+        # that ancestor's real (already-gated) answer, not a stale re-guess.
+        untouched_labels = set(cluster_members) - write_nodes
+        if untouched_labels:
+            untouched_list = sorted(untouched_labels, key=str)
+            fetch_pipe = r.pipeline(transaction=False)
+            for c in untouched_list:
+                fetch_pipe.get(f"{collection}:bin_cluster:{algo_ns}:{c}:meta")
+            for c, raw in zip(untouched_list, fetch_pipe.execute()):
+                if not raw:
+                    continue
+                try:
+                    ancestor_meta = json.loads(raw)
+                except Exception:
+                    ancestor_meta = {}
+                gated_by_label[c] = ancestor_meta.get("inferred_tags") or []
+
+        resolve_file_ids = set(all_member_file_ids)
+        resolve_leaves = {
+            leaf: clusters
+            for leaf, clusters in leaf_to_clusters.items()
+            if idx_to_id[leaf] in resolve_file_ids
+        }
+        resolved = resolve_hierarchical_inferred_tags(
+            resolve_leaves, idx_to_id, gated_by_label
+        )
+        pipe = r.pipeline(transaction=False)
+        _store_inferred_tags(
+            pipe,
+            collection,
+            {fid: all_member_meta[fid] for fid in resolve_file_ids},
+            resolved,
+        )
         pipe.execute()
 
         cluster_list_key = f"{collection}:bin_cluster:list:{algo_ns}"
@@ -2103,6 +2189,7 @@ class BinClusterService:
         self._clear_indexes_via_registry(collection, "file", "inferred_ccip")
         self._clear_indexes_via_registry(collection, "file", "inferred_filename")
         self._clear_indexes_via_registry(collection, "file", "inferred_md5")
+        self._strip_inferred_tags_meta(collection)
         self._clear_indexes_via_registry(collection, "file", "inferred_tags")
 
         if job_service and job_id:
@@ -2110,6 +2197,51 @@ class BinClusterService:
             job_service.update_progress(job_id, 100)
 
         return True
+
+    def _strip_inferred_tags_meta(self, collection):
+        """Drop the `inferred_tags` field from every file it was written on.
+
+        `_clear_indexes_via_registry` only ever deleted the index buckets --
+        the stale list surviving in a file's meta unioned itself straight
+        back into the next build's index (issue #4,
+        plan_e_inferred_tag_gate.md). Walks the registry's own buckets
+        (never a KEYS/SCAN over the whole namespace) and batches in 500s the
+        way propagate_metadata does.
+        """
+        r = self.r
+        reg_key = f"{collection}:reg:file:inferred_tags"
+        members = set()
+        for b_raw in r.smembers(reg_key):
+            bucket = b_raw.decode() if isinstance(b_raw, bytes) else b_raw
+            for m_raw in r.smembers(bucket):
+                members.add(m_raw.decode() if isinstance(m_raw, bytes) else m_raw)
+
+        members = sorted(members)
+        for start in range(0, len(members), 500):
+            chunk = members[start : start + 500]
+            get_pipe = r.pipeline(transaction=False)
+            full_ids = [
+                (
+                    mid
+                    if str(mid).startswith(f"{collection}:file:")
+                    else f"{collection}:file:{mid}"
+                )
+                for mid in chunk
+            ]
+            for full_id in full_ids:
+                get_pipe.get(f"{full_id}:meta")
+            write_pipe = r.pipeline(transaction=False)
+            for full_id, raw in zip(full_ids, get_pipe.execute()):
+                if not raw:
+                    continue
+                try:
+                    meta = json.loads(raw)
+                except Exception:
+                    continue
+                if "inferred_tags" in meta:
+                    del meta["inferred_tags"]
+                    write_pipe.set(f"{full_id}:meta", json.dumps(meta))
+            write_pipe.execute()
 
     def _clear_indexes_via_registry(self, collection, level, field):
         """Delete all index buckets for a field using its registry, then clear the registry."""

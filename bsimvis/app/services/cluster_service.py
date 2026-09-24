@@ -13,6 +13,8 @@ from bsimvis.app.services.cluster_utils import (
     default_bin_cluster_name,
     set_tag_distribution_score,
     function_count_stats,
+    inferred_tag_values,
+    resolve_hierarchical_inferred_tags,
 )
 from bsimvis.app.services import mem_util, sim_edges
 
@@ -3046,6 +3048,17 @@ class ClusterService:
                         m = {}
                 all_member_meta[fid] = m
 
+        inferred_min_cohesion = config_service.get(
+            "clustering.inferred_min_cohesion",
+            min_cohesion if min_cohesion is not None else 0.5,
+        )
+        inferred_min_coverage = config_service.get(
+            "clustering.inferred_min_coverage", 0.5
+        )
+        # Gated inferred tags per cluster (Decision 6) -- resolved per file
+        # after the loop, most-specific passing ancestor wins (Decision 4).
+        gated_by_label = {}
+
         cluster_list_key = f"global:pool:{pool_id}:bin_cluster:list:{algo_ns}"
         pipe = r.pipeline(transaction=False)
         pipe.delete(cluster_list_key)
@@ -3081,6 +3094,10 @@ class ClusterService:
                 cohesion_score = 1.0
 
             set_tag_distribution_score(summary["tag_distribution"], cohesion_score)
+            gated_inferred_tags = inferred_tag_values(
+                summary, cohesion_score, inferred_min_cohesion, inferred_min_coverage
+            )
+            gated_by_label[label] = gated_inferred_tags
             # Default min_cohesion is set before the function call
             min_cohesion_val = min_cohesion if min_cohesion is not None else 0.5
             rep_file_id = members[0] if members else None
@@ -3125,6 +3142,7 @@ class ClusterService:
                 ],
                 "batch_uuid_distribution": summary["batch_uuid_distribution"],
                 "function_count_stats": function_count_stats(member_metas),
+                "inferred_tags": gated_inferred_tags,
             }
 
             for k, v in meta.items():
@@ -3179,6 +3197,30 @@ class ClusterService:
                                 f"{collection_coll}:reg:file:{meta_key}", bucket_key
                             )
 
+        pipe.execute()
+
+        # Decision 4: each file's inferred tags come from the most specific
+        # cluster it survives into that passed the gate, never a union of the
+        # tree (issue #6 -- pool file clusters wrote no inferred_tags at all).
+        # A full pool rebuild recomputes every cluster, so gated_by_label
+        # already covers the whole tree -- no untouched-ancestor lookup like
+        # the per-collection incremental path needs.
+        collection_coll = f"global:pool:{pool_id}"
+        resolved = resolve_hierarchical_inferred_tags(
+            leaf_to_clusters, idx_to_id, gated_by_label
+        )
+        pipe = r.pipeline(transaction=False)
+        n = 0
+        for file_id, values in resolved.items():
+            if not values:
+                continue
+            for value in values:
+                bucket_key = f"{collection_coll}:idx:file:inferred_tags:{value.lower()}"
+                pipe.sadd(bucket_key, file_id)
+                pipe.sadd(f"{collection_coll}:reg:file:inferred_tags", bucket_key)
+            n += 1
+            if n % 500 == 0:
+                pipe.execute()
         pipe.execute()
 
         # Write file-to-cluster assignments: pool:{pool_id}:file:{md5}:bin_clusters
