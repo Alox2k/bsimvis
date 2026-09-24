@@ -303,6 +303,16 @@ class GhidraAnalyzer:
             file_meta.update(extra_meta)
             if "file_name" in extra_meta:
                 file_meta["file_name"] = extra_meta["file_name"]
+            # Plan D1: mint av:/yara:/ip: tags from the CSV fields just merged
+            # in, unioned into `tags` -- never replacing it, so the scan's own
+            # FID/capa/YARA tags on this file survive.
+            from bsimvis.app.services.tag_taxonomy import import_tags
+
+            new_tags = import_tags(file_meta)
+            if new_tags:
+                file_meta["tags"] = sorted(
+                    set(file_meta.get("tags") or []) | set(new_tags)
+                )
 
         file_md5 = file_meta.get("file_md5")
 

@@ -95,7 +95,11 @@ NAMESPACE_POLICY = {
     "capa": Policy("capa", vocabulary=True, aggregate=True, writers=_ANALYSIS),
     "mitre": Policy("mitre", vocabulary=True, aggregate=True, writers=_ANALYSIS),
     "mbc": Policy("mbc", vocabulary=True, aggregate=True, writers=_ANALYSIS),
-    "yara": Policy("yara", vocabulary=True, aggregate=True, writers=_ANALYSIS),
+    # "import" alongside "analysis": the CSV `yara` column is analyst-imported
+    # evidence in the same namespace our own scan writes, via `import_tags`.
+    "yara": Policy(
+        "yara", vocabulary=True, aggregate=True, writers=_ANALYSIS + ("import",)
+    ),
     "rulezet": Policy("ruleset", vocabulary=False, aggregate=False, writers=_ANALYSIS),
     "misp": Policy("family", vocabulary=True, aggregate=True, writers=("rulezet",)),
     "ms-caro-malware-full": Policy(
@@ -171,6 +175,64 @@ def av_tag(label, vendor="unknown"):
     parts = [part for part in re.split(r"[./:_-]+", raw) if part]
     family = parts[2] if len(parts) > 2 else (parts[-1] if parts else "unknown")
     return canonical_tag_id(f"av:{vendor}:{family.lower()}#{raw}")
+
+
+# ClamAV's own signature shape: `Platform.Type.Family-<sig>-<rev>`, e.g.
+# `Unix.Trojan.Mirai-7100807-0`. The CSV `avtype` column carries no vendor
+# column at all, so this is the only signal `import_tags` has to tell a
+# ClamAV label from any other vendor's free-text string.
+_CLAMAV_LABEL_RE = re.compile(r"^[A-Za-z0-9]+\.[A-Za-z0-9]+\.[A-Za-z0-9_+]+-\d+-\d+$")
+
+
+def _import_list(value):
+    """A CSV-imported field value, in whatever shape it currently carries.
+
+    `bsimvis_upload.py`'s CSV parser already turns a `-`/blank cell into `[]`
+    before staging it, but `import_tags` is also called on `propagate_metadata`
+    updates, which arrive as a raw string (comma-separated, or `-`) before that
+    same cleanup runs. Handling both shapes here means one function serves
+    every merge point instead of each caller pre-cleaning its own copy.
+    """
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        items = value
+    else:
+        value = str(value).strip()
+        items = [] if not value or value == "-" else value.split(",")
+    return [v for v in (str(x).strip() for x in items) if v and v != "-"]
+
+
+def import_tags(meta):
+    """CSV-imported `avtype` / `yara` / `cc_ip` fields -> canonical tags.
+
+    Reads the plain metadata fields the CSV importer writes and returns the
+    `av:` / `yara:` / `ip:` tag ids they mint, already run through
+    `filter_tags(..., "import")`. Called at every merge point a file meta
+    passes through (`ghidra_job`, `processing_service`, `propagate_metadata`)
+    so each one re-derives the same tags from the same fields -- the CSV
+    columns stay the source of truth, and the tags are always a projection of
+    them, never stored or carried separately.
+
+    `av_tag`'s vendor: the CSV carries no vendor column, so every label is
+    `unknown` unless its own shape identifies one -- ClamAV's own
+    `Platform.Type.Family-<sig>-<rev>` naming convention is recognisable on
+    sight (see `_CLAMAV_LABEL_RE`), so that shape maps to `clamav`.
+
+    The imported `yara` field is analyst/VT-supplied evidence, not our own
+    scan's output (that already writes `yara:` tags elsewhere) -- it carries
+    only a rule name, no category/family, so it lands at
+    `yara:unknown:unknown#<rule>` the same way an unrecognised scan match does.
+    """
+    tags = []
+    for label in _import_list(meta.get("avtype")):
+        vendor = "clamav" if _CLAMAV_LABEL_RE.match(label) else "unknown"
+        tags.append(av_tag(label, vendor))
+    for rule in _import_list(meta.get("yara")):
+        tags.append(yara_tag(None, None, rule))
+    for addr in _import_list(meta.get("cc_ip")):
+        tags.append(canonical_tag_id(f"ip:{addr}"))
+    return filter_tags(tags, "import")
 
 
 # --- Severity ---------------------------------------------------------------
@@ -1335,6 +1397,30 @@ def demo():
         av_tag("Unix.Trojan.Mirai-7100807-0", "clamav")
         == "av:clamav:mirai#Unix.Trojan.Mirai-7100807-0"
     )
+    # D1: minting av:/yara:/ip: tags from the CSV's own field names.
+    assert import_tags({"avtype": "Unix.Trojan.Mirai-7100807-0"}) == [
+        "av:clamav:mirai#Unix.Trojan.Mirai-7100807-0"
+    ], import_tags({"avtype": "Unix.Trojan.Mirai-7100807-0"})
+    assert import_tags({"avtype": "Some.Weird.Label"}) == [
+        "av:unknown:label#Some.Weird.Label"
+    ], "no digits tail -> not the ClamAV shape, vendor stays unknown"
+    assert import_tags({"yara": "ELF_Mirai"}) == ["yara:unknown:unknown#ELF_Mirai"]
+    assert import_tags({"cc_ip": "1.2.3.4"}) == ["ip:1.2.3.4"]
+    # "-", blank and list-shaped values (already cleaned by the CSV parser).
+    assert import_tags({"avtype": "-", "yara": "", "cc_ip": None}) == []
+    assert import_tags({}) == []
+    assert import_tags(
+        {"avtype": ["Unix.Trojan.Mirai-7100807-0"], "cc_ip": ["1.2.3.4", "5.6.7.8"]}
+    ) == [
+        "av:clamav:mirai#Unix.Trojan.Mirai-7100807-0",
+        "ip:1.2.3.4",
+        "ip:5.6.7.8",
+    ]
+    # Every writer boundary still enforces the namespace's own writer list --
+    # `import_tags` never mints anything outside av:/yara:/ip:, but the
+    # widened yara policy must not have opened the door to other writers.
+    assert filter_tags(["yara:trojan:mirai#x"], "user") == []
+
     assert not tag_policy("rulezet:uuid").vocabulary
     assert tag_policy("reviewed", "user") is USER_POLICY
     assert filter_tags(["fid:libc", "reviewed"], "user") == ["reviewed"]

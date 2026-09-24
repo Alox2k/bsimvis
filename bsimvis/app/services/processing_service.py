@@ -113,6 +113,16 @@ class ProcessingService:
 
         coll_file_meta["bsim_features_count"] = total_features
 
+        # Plan D1: mint av:/yara:/ip: tags from the (possibly CSV-merged)
+        # avtype/yara/cc_ip fields, unioned into `tags`. Covers both the
+        # streamed-analysis file_meta and the local-analysis JSON blob path --
+        # idempotent with ghidra_job's own union, since this is a set union.
+        new_tags = tag_taxonomy.import_tags(coll_file_meta)
+        if new_tags:
+            coll_file_meta["tags"] = sorted(
+                set(coll_file_meta.get("tags") or []) | set(new_tags)
+            )
+
         # This overwrites the whole meta blob, including whatever status the
         # upload stub / GHIDRA_ANALYZE dispatch set -- carry it forward
         # instead of clobbering it. Functions/features are still being

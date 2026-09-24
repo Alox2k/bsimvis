@@ -43,6 +43,7 @@ from bsimvis.app.services import container_sim_service, lineage_service
 from bsimvis.app.services.cluster_utils import (
     bin_cluster_ns,
     fetch_bin_cluster_meta_all_axes,
+    normalize_tag_distribution,
     pick_best_cluster,
 )
 from bsimvis.app.services.collection_config import (
@@ -883,6 +884,14 @@ class ScanService:
                                 "filename_distribution", []
                             ),
                             "md5_distribution": meta.get("md5_distribution", []),
+                            # Plan D3: the tag axes next to the legacy keys, so
+                            # a cluster whose only evidence is a mint-on-write
+                            # av:/yara: tag still reports on a scan.
+                            "tag_distribution": normalize_tag_distribution(
+                                meta.get("tag_distribution", {}),
+                                meta.get("member_count") or 0,
+                                meta.get("cohesion_score"),
+                            ),
                             "via": [],
                         },
                     )

@@ -165,7 +165,9 @@ def search_files():
         # 2. Sort — walk the pre-built numeric ZSET keeping only candidates
         # (same idiom as search_bin_sim) for global order across pages.
         total = len(doc_ids)
-        ordered_ids = sort_doc_ids(r, col, doc_ids, sort_by, sort_order, slice_end=offset + limit)
+        ordered_ids = sort_doc_ids(
+            r, col, doc_ids, sort_by, sort_order, slice_end=offset + limit
+        )
 
         # 3. Paginate
         paged_ids = ordered_ids[offset : offset + limit]
@@ -263,7 +265,18 @@ def search_files():
             for u, cm in meta_by_uuid.items():
                 if (cm.get("cohesion_score") or 0) >= min_cohesion:
                     # Strip huge inferred metadata distributions to keep payload tiny
-                    for dist_key in ("yara_distribution", "avtype_distribution", "filetype_distribution", "ccip_distribution", "filename_distribution", "md5_distribution", "tag_distribution", "architecture_distribution", "executable_format_distribution", "batch_uuid_distribution"):
+                    for dist_key in (
+                        "yara_distribution",
+                        "avtype_distribution",
+                        "filetype_distribution",
+                        "ccip_distribution",
+                        "filename_distribution",
+                        "md5_distribution",
+                        "tag_distribution",
+                        "architecture_distribution",
+                        "executable_format_distribution",
+                        "batch_uuid_distribution",
+                    ):
                         cm.pop(dist_key, None)
                     cluster_meta_map[u] = cm
             # Flatten to a list of uuids (axis is encoded in meta["axis"])
@@ -370,21 +383,21 @@ def _sort_by_tag_index(r, collection, doc_ids, sort_by, desc, slice_end=None):
 
     candidates = set(doc_ids)
     ordered, seen = [], set()
-    
+
     BATCH_SIZE = 500
     for i in range(0, len(buckets), BATCH_SIZE):
-        batch = buckets[i:i+BATCH_SIZE]
+        batch = buckets[i : i + BATCH_SIZE]
         pipe = r.pipeline(transaction=False)
         for _, key in batch:
             pipe.smembers(key)
-            
+
         for members in pipe.execute():
             for m in members or []:
                 m = m.decode() if isinstance(m, bytes) else str(m)
                 if m in candidates and m not in seen:
                     seen.add(m)
                     ordered.append(m)
-                    
+
         if slice_end and len(ordered) >= slice_end:
             break
 
@@ -431,6 +444,21 @@ RANGE_FIELD_MAP = {
     "max_first_seen": "first_seen",
     "min_last_seen": "last_seen",
     "max_last_seen": "last_seen",
+}
+
+
+# Plan D4, Decision 7: the old CSV-import and inferred-* filter params keep
+# resolving by also matching the tag family D1/PR-E now mints from the same
+# fields -- unioned with the legacy field's own match (never replacing it),
+# so an old permalink or saved search never loses a result the field used to
+# return, and a file only PR D1/PR E has touched starts showing up too.
+_TAG_FILTER_ALIASES = {
+    "avtype": ("tags", "av:"),
+    "yara": ("tags", "yara:"),
+    "cc_ip": ("tags", "ip:"),
+    "inferred_avtype": ("inferred_tags", "inferred:av:"),
+    "inferred_yara": ("inferred_tags", "inferred:yara:"),
+    "inferred_ccip": ("inferred_tags", "inferred:ip:"),
 }
 
 
@@ -504,6 +532,12 @@ def query_files_advanced(r, collection, filters):
                 | get_field_matches("parent_file_name", val)
                 | get_field_matches("related_file_name", val)
             )
+        elif field in _TAG_FILTER_ALIASES:
+            tag_field, ns_prefix = _TAG_FILTER_ALIASES[field]
+            glob_val = f"{ns_prefix}*{val}*"
+            candidates &= get_field_matches(tag_field, glob_val) | get_field_matches(
+                field, val
+            )
         elif field in [
             "language_id",
             "status",
@@ -513,14 +547,8 @@ def query_files_advanced(r, collection, filters):
             "first_seen",
             "last_seen",
             "filetype",
-            "avtype",
-            "yara",
-            "cc_ip",
             "file_names",
-            "inferred_yara",
-            "inferred_avtype",
             "inferred_filetype",
-            "inferred_ccip",
             "inferred_filename",
             "inferred_md5",
             "inferred_tags",

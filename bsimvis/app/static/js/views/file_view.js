@@ -687,7 +687,17 @@ window.FileView = {
                     ["fa-solid fa-shield", "AV Type", axisMeta.avtype],
                     ["fa-solid fa-network-wired", "CC IP", axisMeta.ccip],
                 ];
-                let inferredHtml = inferredCategories.map(([icon, label, values]) => inferredCategory(icon, label, values)).join("");
+                // Plan D3: the file's own gated inferred tags (plan E's
+                // cohesion/coverage gate on the cluster's `tag_distribution`),
+                // shown as read-only chips above the live per-axis estimate
+                // below -- these are the ones the system actually trusts.
+                const gatedTags = file.inferred_tags || [];
+                const gatedChipsHtml = gatedTags.length ? `<div class="metadata-axis" style="padding:10px 14px;"><div style="font-size:0.8rem; color:var(--subtle); margin-bottom:6px;"><i class="fa-solid fa-shield-halved"></i> Gated inferred tags <span class="dim">(cohesion + coverage checked)</span></div><div style="display:flex; flex-wrap:wrap; gap:6px;">${gatedTags.map(t => {
+                    const color = metadataColor({ tag_id: t }, 0, 'tag_id');
+                    return `<span class="mono" style="background:${escapeAttr(color)}22; border:1px solid ${escapeAttr(color)}; color:${escapeAttr(color)}; border-radius:4px; padding:2px 8px; font-size:0.78rem;">${escapeHtml(t)}</span>`;
+                }).join('')}</div></div>` : '';
+
+                let inferredHtml = gatedChipsHtml + inferredCategories.map(([icon, label, values]) => inferredCategory(icon, label, values)).join("");
                 inferredHtml += Object.entries(axisMeta.tags || {}).sort(([a], [b]) => a.localeCompare(b)).map(([axis, values]) => inferredTagCategory(axis, values)).join("");
                 const inferredEl = document.getElementById("inferred-meta");
                 inferredEl.innerHTML = inferredHtml || '<div class="dim" style="padding:20px;">No inferred metadata for this axis.</div>';

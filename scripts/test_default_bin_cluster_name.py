@@ -70,10 +70,89 @@ def test_fallback_when_nothing_known():
     assert name == FALLBACK, name
 
 
+def test_tag_distribution_family_wins_over_legacy_lists():
+    # Plan D, Decision 8: tag_distribution's family axis (mint-on-write av:
+    # tags) outranks the legacy avtype_list, same precedence order as before.
+    name = default_bin_cluster_name(
+        names_list=["dropper.exe"],
+        avtype_list=["Gafgyt"],
+        yara_list=[],
+        fallback=FALLBACK,
+        tag_distribution={
+            "family": [
+                {
+                    "tag_id": "av",
+                    "count": 5,
+                    "children": [
+                        {
+                            "tag_id": "av:clamav",
+                            "count": 5,
+                            "children": [
+                                {
+                                    "tag_id": "av:clamav:mirai",
+                                    "count": 5,
+                                    "children": [],
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+        },
+    )
+    assert name == "mirai", name
+
+
+def test_tag_distribution_yara_fallback_when_no_family():
+    name = default_bin_cluster_name(
+        names_list=["dropper.exe"],
+        avtype_list=[],
+        yara_list=["legacy_rule"],
+        fallback=FALLBACK,
+        tag_distribution={
+            "family": [],
+            "yara": [
+                {
+                    "tag_id": "yara",
+                    "count": 3,
+                    "children": [
+                        {
+                            "tag_id": "yara:trojan",
+                            "count": 3,
+                            "children": [
+                                {
+                                    "tag_id": "yara:trojan:mirai",
+                                    "count": 3,
+                                    "children": [],
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+        },
+    )
+    assert name == "mirai", name
+
+
+def test_tag_distribution_absent_falls_back_to_legacy():
+    name = default_bin_cluster_name(
+        names_list=["dropper.exe"],
+        avtype_list=["Gafgyt"],
+        yara_list=[],
+        fallback=FALLBACK,
+        tag_distribution=None,
+    )
+    assert name == "Gafgyt", name
+
+
 if __name__ == "__main__":
     test_avtype_wins_over_everything()
     test_yara_wins_when_no_avtype()
     test_short_filename_used_verbatim()
     test_long_filename_gets_truncated()
     test_fallback_when_nothing_known()
+    test_tag_distribution_family_wins_over_legacy_lists()
+    test_tag_distribution_yara_fallback_when_no_family()
+    test_tag_distribution_absent_falls_back_to_legacy()
     print("OK")

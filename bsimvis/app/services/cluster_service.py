@@ -3075,7 +3075,11 @@ class ClusterService:
             )
 
             default_name = default_bin_cluster_name(
-                names_list, avtype_list, yara_list, f"Pool File Cluster {c_uuid}"
+                names_list,
+                avtype_list,
+                yara_list,
+                f"Pool File Cluster {c_uuid}",
+                tag_distribution=summary.get("tag_distribution"),
             )
 
             yara_freq = summary["yara_distribution"]

@@ -9,6 +9,7 @@ from bsimvis.app.services.collection_config import resolve_collection_algo
 from bsimvis.app.services.index_service import get_pool_id
 from bsimvis.app.services.query_syntax import parse_filter_value
 from bsimvis.app.services.cluster_utils import (
+    flatten_tag_distribution,
     function_count_stats,
     normalize_tag_distribution,
 )
@@ -360,6 +361,11 @@ def list_bin_clusters():
                         item.get("value", "").lower()
                         for item in m.get("yara_distribution", [])
                         if item.get("value")
+                    ] + [
+                        t.lower()
+                        for t in flatten_tag_distribution(
+                            m.get("tag_distribution") or {}, ("yara", "family")
+                        )
                     ]
                     search_targets = [cid, cuuid, cname, *user_tags] + yara_values
                     if not any(kw in v.lower() for v in search_targets):
@@ -388,6 +394,11 @@ def list_bin_clusters():
                     item.get("value", "").lower()
                     for item in m.get("yara_distribution", [])
                     if item.get("value")
+                ] + [
+                    t.lower()
+                    for t in flatten_tag_distribution(
+                        m.get("tag_distribution") or {}, ("yara", "family")
+                    )
                 ]
                 search_targets = [cname.lower()] + yara_values
                 if not any(cluster_name_q in v for v in search_targets):

@@ -20,7 +20,26 @@ DISTRIBUTION_FIELDS = (
 )
 
 
-def default_bin_cluster_name(names_list, avtype_list, yara_list, fallback):
+def _tag_distribution_label(roots):
+    """Most prevalent leaf under a `tag_distribution` axis, short-form, or None.
+
+    Walks the highest-count child at each level -- same "most common wins"
+    rule `Counter.most_common(1)` gave the legacy field lists -- and returns
+    only the tag's last segment: `av:clamav:mirai` -> `mirai`, matching the
+    short AV-family-style names this function has always produced.
+    """
+    if not roots:
+        return None
+    node = max(roots, key=lambda n: n.get("count", 0))
+    while node.get("children"):
+        node = max(node["children"], key=lambda c: c.get("count", 0))
+    tag_id = node.get("tag_id") or ""
+    return tag_id.rsplit(":", 1)[-1] if tag_id else None
+
+
+def default_bin_cluster_name(
+    names_list, avtype_list, yara_list, fallback, tag_distribution=None
+):
     """Short, human-meaningful default name for a binary cluster.
 
     A raw member filename (the old default) is often a long malware-scanner
@@ -28,7 +47,19 @@ def default_bin_cluster_name(names_list, avtype_list, yara_list, fallback):
     ('Emotet', 'Gafgyt') and YARA rule names are short and already describe
     what the cluster *is*, so prefer them; fall back to a truncated filename,
     then to the caller's generic placeholder.
+
+    Plan D, Decision 8: the source is `tag_distribution`'s `family` then
+    `yara` axis (mint on write's av:/yara: tags) when the caller has one,
+    same preference order as the legacy `avtype_list`/`yara_list` it replaces.
+    Callers that have not fully switched over may omit `tag_distribution`,
+    which falls back to the legacy lists untouched.
     """
+    if tag_distribution:
+        label = _tag_distribution_label(
+            tag_distribution.get("family")
+        ) or _tag_distribution_label(tag_distribution.get("yara"))
+        if label:
+            return label
     if avtype_list:
         return Counter(avtype_list).most_common(1)[0][0]
     if yara_list:
@@ -171,6 +202,28 @@ def build_tag_distribution(by_axis, member_count, limit=None):
             return node
 
         out[axis] = [finish(node) for node in roots]
+    return out
+
+
+def flatten_tag_distribution(distribution, axes=None):
+    """Every `tag_id` in a `tag_distribution`, across the given axes (or all).
+
+    Plan D3: the legacy `yara_distribution`/`avtype_distribution` lists fed
+    keyword search by their `value`s; this is the tag-sourced equivalent so a
+    search keeps matching once a cluster's only evidence is a mint-on-write
+    `av:`/`yara:` tag. Walks every node, not just leaves, so a namespace or a
+    vendor segment is searchable too.
+    """
+    out = []
+
+    def visit(nodes):
+        for node in nodes or []:
+            if node.get("tag_id"):
+                out.append(node["tag_id"])
+            visit(node.get("children"))
+
+    for axis in axes if axes is not None else distribution.keys():
+        visit(distribution.get(axis) or [])
     return out
 
 

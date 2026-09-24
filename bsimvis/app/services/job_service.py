@@ -41,6 +41,7 @@ class JobType(Enum):
     REMOVE_FILES = "remove_files"
     CLEAN_COLLECTION = "clean_collection"
     PROPAGATE_METADATA = "propagate_metadata"
+    BACKFILL_IMPORT_TAGS = "backfill_import_tags"
     BUILD_POOL_SIM = "build_pool_sim"
     CLUSTER_POOL = "cluster_pool"
     INIT_POOL_BUILD = "init_pool_build"

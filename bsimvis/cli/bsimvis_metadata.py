@@ -61,12 +61,27 @@ def run_normalize_time(args):
     )
 
 
+def run_backfill_tags(host, port, args):
+    """Enqueues Plan D2's collection-wide av:/yara:/ip: tag backfill."""
+    api_url = f"http://{host}:{port}/api/file/metadata/backfill_import_tags"
+    try:
+        resp = requests.post(api_url, json={"collection": args.collection})
+        resp.raise_for_status()
+        res = resp.json()
+        print(f"[+] Import-tag backfill job enqueued. Job ID: {res.get('job_id')}")
+    except Exception as e:
+        print(f"[!] Failed to enqueue import-tag backfill: {e}")
+        sys.exit(1)
+
+
 def run_metadata(host, port, args):
     """
     Submits metadata updates via API for propagation.
     """
     if args.action == "normalize-time":
         return run_normalize_time(args)
+    if args.action == "backfill-tags":
+        return run_backfill_tags(host, port, args)
 
     updates = parse_metadata_file(args.metadata)
     if updates is None:

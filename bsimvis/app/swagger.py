@@ -178,6 +178,13 @@ bulk_metadata_propagate_model = api.model(
     },
 )
 
+backfill_import_tags_model = api.model(
+    "BackfillImportTags",
+    {
+        "collection": fields.String(default="main", description="Collection name"),
+    },
+)
+
 stage_metadata_model = api.model(
     "StageBatchMetadata",
     {
@@ -772,6 +779,43 @@ class FileSearch(Resource):
                 "description": "Filter by tag (static or user)",
                 "example": "malware",
             },
+            "avtype": {
+                "description": (
+                    "Deprecated: matches the av: tag family too (plan D4). "
+                    "Filter by imported AV label substring."
+                ),
+                "example": "mirai",
+            },
+            "yara": {
+                "description": (
+                    "Deprecated: matches the yara: tag family too (plan D4). "
+                    "Filter by imported YARA rule name substring."
+                ),
+            },
+            "cc_ip": {
+                "description": (
+                    "Deprecated: matches the ip: tag family too (plan D4). "
+                    "Filter by imported C2 IP substring."
+                ),
+            },
+            "inferred_avtype": {
+                "description": (
+                    "Deprecated: matches inferred_tags' av: entries too "
+                    "(plan D4). Filter by a cluster's inferred AV label."
+                ),
+            },
+            "inferred_yara": {
+                "description": (
+                    "Deprecated: matches inferred_tags' yara: entries too "
+                    "(plan D4). Filter by a cluster's inferred YARA rule."
+                ),
+            },
+            "inferred_ccip": {
+                "description": (
+                    "Deprecated: matches inferred_tags' ip: entries too "
+                    "(plan D4). Filter by a cluster's inferred C2 IP."
+                ),
+            },
             "static_tag": {
                 "description": "Filter by static analysis tag only",
                 "example": "packed",
@@ -1036,6 +1080,22 @@ class BulkMetadataPropagate(Resource):
         from bsimvis.app.routes.file import bulk_propagate_metadata
 
         return bulk_propagate_metadata()
+
+
+@ns_file.route("/metadata/backfill_import_tags")
+class BackfillImportTags(Resource):
+    @ns_file.doc(
+        description=(
+            "Plan D2: enqueues the collection-wide av:/yara:/ip: tag backfill "
+            "(BACKFILL_IMPORT_TAGS), chunked as a self-continuing job."
+        )
+    )
+    @ns_file.expect(backfill_import_tags_model)
+    def post(self):
+        """Enqueues the import-tag backfill job for a collection."""
+        from bsimvis.app.routes.file import backfill_import_tags
+
+        return backfill_import_tags()
 
 
 @ns_file.route("/call_graph")

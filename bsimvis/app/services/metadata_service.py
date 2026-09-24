@@ -30,6 +30,7 @@ from bsimvis.app.services.cluster_utils import (
     cluster_summary,
     function_count_stats,
 )
+from bsimvis.app.services import tag_taxonomy
 
 # `upload --metadata` matches CSV rows by md5, but unpacking only happens on the
 # server: the md5 of an archive member or a UPX-unpacked payload does not exist
@@ -236,6 +237,19 @@ class MetadataService:
                 if old_val != cleaned_val:
                     new_meta[field] = cleaned_val
                     changed_fields.append(field)
+
+            # Plan D1, Decision 2: mint av:/yara:/ip: tags from the fields just
+            # merged and UNION them into `tags` -- never send them as a `tags`
+            # key here, which would hit the list_fields replace above and wipe
+            # every FID/capa/YARA-scan tag already on the file.
+            import_ids = tag_taxonomy.import_tags(new_meta)
+            if import_ids:
+                old_tags = sorted(set(new_meta.get("tags") or []))
+                merged_tags = sorted(set(old_tags) | set(import_ids))
+                if merged_tags != old_tags:
+                    new_meta["tags"] = merged_tags
+                    if "tags" not in changed_fields:
+                        changed_fields.append("tags")
 
             if not changed_fields:
                 logging.info(f"[*] No changes detected for file {md5}")
@@ -476,3 +490,43 @@ class MetadataService:
 
         logging.info(f"[+] Propagation complete for {total_files} files.")
         return True
+
+    def backfill_import_tags(self, collection, cursor="0", chunk_size=500):
+        """Plan D2: mint av:/yara:/ip: tags for files that predate D1.
+
+        One chunk per call, walked via `SSCAN` over the `{collection}:all_files`
+        registry (never `KEYS`/`keys`) so a collection with millions of files
+        never blocks. The worker re-enqueues a continuation with the returned
+        cursor until it comes back `"0"`. Idempotent -- a file whose `tags`
+        already carries the minted ids is left untouched -- and it deletes
+        nothing, matching Decision 3's dual write.
+
+        Returns `(next_cursor, files_seen, files_changed)`.
+        """
+        r = self.r
+        new_cursor, raw_ids = r.sscan(
+            f"{collection}:all_files", cursor=int(cursor), count=chunk_size
+        )
+        file_ids = [fid.decode() if isinstance(fid, bytes) else fid for fid in raw_ids]
+
+        pipe = r.pipeline(transaction=False)
+        changed = 0
+        for file_base_id in file_ids:
+            raw_meta = r.get(f"{file_base_id}:meta")
+            if not raw_meta:
+                continue
+            meta = json.loads(raw_meta)
+            new_ids = tag_taxonomy.import_tags(meta)
+            if not new_ids:
+                continue
+            old_tags = sorted(set(meta.get("tags") or []))
+            merged = sorted(set(old_tags) | set(new_ids))
+            if merged == old_tags:
+                continue
+            meta["tags"] = merged
+            pipe.set(f"{file_base_id}:meta", json.dumps(meta))
+            _unindex_tag(pipe, collection, "file", "tags", old_tags, file_base_id)
+            _index_tag(pipe, collection, "file", "tags", merged, file_base_id)
+            changed += 1
+        pipe.execute()
+        return str(new_cursor), len(file_ids), changed

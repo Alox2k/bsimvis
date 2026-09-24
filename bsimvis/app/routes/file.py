@@ -1319,3 +1319,29 @@ def bulk_propagate_metadata():
     except Exception as e:
         logging.error(f"Failed bulk metadata propagation: {e}")
         return {"error": str(e)}, 500
+
+
+def backfill_import_tags():
+    """Plan D2: enqueues the collection-wide av:/yara:/ip: tag backfill.
+
+    One `BACKFILL_IMPORT_TAGS` job walks one chunk of `{collection}:all_files`
+    and re-enqueues itself as a continuation until the whole collection is
+    covered; see `MetadataService.backfill_import_tags`.
+    """
+    try:
+        data = request.json or {}
+        collection = data.get("collection", "main")
+
+        job_id = job_service.create_job(
+            JobType.BACKFILL_IMPORT_TAGS, {"collection": collection}
+        )
+
+        return {
+            "status": "processing",
+            "job_id": job_id,
+            "message": "Import-tag backfill job enqueued.",
+        }
+
+    except Exception as e:
+        logging.error(f"Failed to enqueue import-tag backfill: {e}")
+        return {"error": str(e)}, 500

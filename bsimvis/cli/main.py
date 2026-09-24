@@ -715,6 +715,14 @@ def main():
         "-c", "--collection", required=True, help="Target collection name"
     )
 
+    metadata_backfill_tags = metadata_actions.add_parser(
+        "backfill-tags",
+        help="Plan D2: mint av:/yara:/ip: tags for files that predate D1",
+    )
+    metadata_backfill_tags.add_argument(
+        "-c", "--collection", required=True, help="Target collection name"
+    )
+
     rulezet_parser = subparsers.add_parser(
         "rulezet", help="Mirror YARA rules from rulezet.org"
     )

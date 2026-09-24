@@ -570,7 +570,11 @@ class BinClusterService:
             )
 
             default_name = default_bin_cluster_name(
-                names_list, avtype_list, yara_list, f"Binary Cluster {label}"
+                names_list,
+                avtype_list,
+                yara_list,
+                f"Binary Cluster {label}",
+                tag_distribution=summary.get("tag_distribution"),
             )
 
             yara_freq = summary["yara_distribution"]
@@ -1907,7 +1911,11 @@ class BinClusterService:
             )
 
             default_name = default_bin_cluster_name(
-                names_list, avtype_list, yara_list, f"Binary Cluster {label}"
+                names_list,
+                avtype_list,
+                yara_list,
+                f"Binary Cluster {label}",
+                tag_distribution=summary.get("tag_distribution"),
             )
 
             yara_freq = summary["yara_distribution"]

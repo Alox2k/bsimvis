@@ -1021,6 +1021,29 @@ class Worker:
                 job_id=job_id,
             )
 
+        elif jtype == JobType.BACKFILL_IMPORT_TAGS.value:
+            cursor = str(payload.get("cursor", "0"))
+            next_cursor, seen, changed = self.metadata_service.backfill_import_tags(
+                collection, cursor=cursor
+            )
+            if job_id:
+                self.job_service.update_progress(
+                    job_id,
+                    0 if next_cursor != "0" else 100,
+                    f"Backfilled import tags on {changed}/{seen} files (cursor {cursor} -> {next_cursor})",
+                )
+            if next_cursor != "0":
+                # Same continuation push upload_chunk uses: this collection's
+                # chunks interleave with the rest of the fleet's work instead
+                # of one backfill hogging the queue head.
+                next_job_id = self.job_service.create_job(
+                    JobType.BACKFILL_IMPORT_TAGS,
+                    {"collection": collection, "cursor": next_cursor},
+                    enqueue=False,
+                )
+                self.job_service.enqueue_job(next_job_id, is_continuation=True)
+            return True
+
         elif jtype == JobType.INIT_POOL_BUILD.value:
             pool_id = payload.get("pool_id")
             from bsimvis.app.services.pool_service import pool_service
