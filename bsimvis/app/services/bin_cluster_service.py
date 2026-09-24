@@ -516,7 +516,16 @@ class BinClusterService:
             chunk = all_member_file_ids[i : i + 1000]
             m_pipe = r.pipeline(transaction=False)
             for file_id in chunk:
-                m_pipe.get(f"{collection}:file:{file_id}:meta")
+                # Callers disagree on id shape: the full-build threshold_uf
+                # path passes fids already prefixed "{collection}:file:{md5}"
+                # (from sim_edges.load_edges), the incremental path passes
+                # bare md5s (from bin_sim:involves keys). Prefixing an
+                # already-prefixed id double-prefixes and the meta lookup
+                # silently misses -- blanking every threshold_uf cluster's
+                # tag_distribution and starving the inferred-tag gate.
+                prefix = f"{collection}:file:"
+                key = file_id if file_id.startswith(prefix) else f"{prefix}{file_id}"
+                m_pipe.get(f"{key}:meta")
             for file_id, raw_meta in zip(chunk, m_pipe.execute()):
                 m = {}
                 if raw_meta:
