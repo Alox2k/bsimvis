@@ -1,6 +1,6 @@
 # Plan: unify metadata and tags — overview and sequencing
 
-Four plans, one goal: retire the ad-hoc metadata fields (`avtype`, `yara`,
+Five plans, one goal: retire the ad-hoc metadata fields (`avtype`, `yara`,
 `cc_ip`, `filetype`, `inferred_*`) in favour of the namespaced tag vocabulary,
 so that any analysis module, any external source and any analyst writes one
 kind of fact through one write path.
@@ -13,7 +13,8 @@ one depends on the earlier ones landing.
 | A | Time normalization; real `first_seen` / `last_seen` | — | [plan_a_time_normalization.md](plan_a_time_normalization.md) |
 | B | Namespace policy table; writer reservation | — | [plan_b_tag_namespace_policy.md](plan_b_tag_namespace_policy.md) |
 | C | Cluster tag aggregation; inferred tags | B | [plan_c_cluster_tag_aggregation.md](plan_c_cluster_tag_aggregation.md) |
-| D | Retire the metadata fields | B, C | [plan_d_retire_metadata_fields.md](plan_d_retire_metadata_fields.md) |
+| E | Gate inferred tags on cohesion and coverage | C | [plan_e_inferred_tag_gate.md](plan_e_inferred_tag_gate.md) |
+| D | Retire the metadata fields | B, C, E | [plan_d_retire_metadata_fields.md](plan_d_retire_metadata_fields.md) |
 
 A and B are independent of each other and can run in parallel.
 
