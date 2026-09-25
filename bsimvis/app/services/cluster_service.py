@@ -2478,22 +2478,30 @@ class ClusterService:
                     pipe.execute()
 
             if cid != "noise":
+                # Name/uuid buckets are shared per-cluster, so the per-member
+                # cluster-id removal above never touches them. Clear only this
+                # algo's own: the func indexes aren't algo-namespaced, and a
+                # registry-wide wipe here deleted every other algo's buckets.
+                meta_key = f"{collection}:cluster:{algo}:{cid}:meta"
+                raw_meta = r.get(meta_key)
+                cm = json.loads(raw_meta) if raw_meta else {}
+                if cm.get("cluster_uuid"):
+                    bucket = f"{collection}:idx:func:cluster_uuid:{cm['cluster_uuid'].lower()}"
+                    r.delete(bucket)
+                    r.srem(f"{collection}:reg:func:cluster_uuid", bucket)
+                if cm.get("cluster_name") and members:
+                    bucket = f"{collection}:idx:func:cluster_name:{cm['cluster_name'].lower()}"
+                    for start in range(0, len(members), 1000):
+                        r.srem(bucket, *members[start : start + 1000])
+                    if not r.exists(bucket):
+                        r.srem(f"{collection}:reg:func:cluster_name", bucket)
                 r.delete(f"{collection}:cluster:{algo}:{cid}:members")
                 r.delete(f"{collection}:cluster:{algo}:{cid}:direct_members")
-                r.delete(f"{collection}:cluster:{algo}:{cid}:meta")
+                r.delete(meta_key)
 
             if job_service and job_id and i % 10 == 0:
                 pct = int((i / total_clusters) * 100)
                 job_service.update_progress(job_id, pct)
-
-        # Clear name/uuid index buckets. These are shared per-cluster, so the
-        # per-member cluster-id removal above never touches them. Left stale,
-        # cluster_uuid bucket keeps "matching" functions that no longer
-        # carry that cluster in their live cluster_scores, which is why
-        # min_cohesion filtering on /functions silently drops it (mirrors
-        # bin_cluster_service.clear_clusters, which already does this).
-        self._clear_indexes_via_registry(collection, "func", "cluster_name")
-        self._clear_indexes_via_registry(collection, "func", "cluster_uuid")
 
         # Plan D5b: avtype/yara/cc_ip left INDEX_CONFIG at the func level
         # (Decision 6 -- function search joins the file's own tags instead).
