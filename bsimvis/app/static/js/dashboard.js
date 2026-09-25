@@ -304,7 +304,7 @@ const routes = {
         headers: [
             { label: 'Filename', width: '17%' },
             { label: 'MD5 / Arch', width: '11%' },
-            { label: 'Metadata', width: '14%' },
+            { label: 'Inferred Tags', width: '14%' },
             { label: 'Batch UUID', width: '9%' },
             { label: 'Status', width: '7%' },
             { label: 'Funcs', width: '7%', sort: 'function_count' },
@@ -673,6 +673,38 @@ async function refreshData(appendArg = false, force = false, skipHeader = false)
     if (viewKey === 'files') {
         if (!params.has('min_cohesion')) {
             params.set('min_cohesion', '0.5');
+        }
+        // Plan D3.4: rewrite a permalink's retired filter params into their
+        // tag form on load, so a saved link never applies a filter that has
+        // no visible input. Same glob the server-side alias uses
+        // (search_file.py's _TAG_FILTER_ALIASES).
+        let legacyRewritten = false;
+        for (const [param, ns] of Object.entries({ avtype: 'av', yara: 'yara', cc_ip: 'ip' })) {
+            const val = params.get(param);
+            if (val) {
+                params.append('tag', `${ns}:*${val}*`);
+                params.delete(param);
+                legacyRewritten = true;
+            }
+        }
+        for (const [param, ns] of Object.entries({ inferred_avtype: 'av', inferred_yara: 'yara', inferred_ccip: 'ip' })) {
+            const val = params.get(param);
+            if (val && !params.get('inferred_tags')) {
+                params.set('inferred_tags', `${ns}:*${val}*`);
+                params.delete(param);
+                legacyRewritten = true;
+            }
+            // Otherwise leave it: the server-side alias still resolves it
+            // (Decision 7), and inferred_tags already has the user's value.
+        }
+        if (params.has('inferred_filetype')) {
+            // Retired outright (Decision 5/9) -- no tag equivalent, and the
+            // server now 400s on it. Dropping beats a broken search.
+            params.delete('inferred_filetype');
+            legacyRewritten = true;
+        }
+        if (legacyRewritten) {
+            history.replaceState(null, '', `${window.location.pathname}?${params.toString()}`);
         }
     } else if (viewKey === 'functions') {
         if (!params.has('min_cohesion')) {
@@ -1834,21 +1866,7 @@ function updateUI(viewKey, collection, params, route, force = false) {
                             </div>
                         </th>
                         <th>
-                            <div style="display:flex; flex-direction:column; gap:4px;">
-                                <input type="text" id="flt-file-yara" placeholder="Yara..." value="${escapeAttr(p.get('yara') || '')}" onfocus="attachAutocomplete(this, 'file', 'yara', (val) => { this.value = val; applyAdvancedFileSearch(); })" onchange="debouncedSearch(applyAdvancedFileSearch)" onkeydown="handleFilterKey(event, applyAdvancedFileSearch)" style="font-size:0.6rem; width: 100%; box-sizing: border-box;">
-                                <input type="text" id="flt-file-avtype" placeholder="AVType..." value="${escapeAttr(p.get('avtype') || '')}" onfocus="attachAutocomplete(this, 'file', 'avtype', (val) => { this.value = val; applyAdvancedFileSearch(); })" onchange="debouncedSearch(applyAdvancedFileSearch)" onkeydown="handleFilterKey(event, applyAdvancedFileSearch)" style="font-size:0.6rem; width: 100%; box-sizing: border-box;">
-                                <input type="text" id="flt-file-ccip" placeholder="CC IP..." value="${escapeAttr(p.get('cc_ip') || '')}" onfocus="attachAutocomplete(this, 'file', 'cc_ip', (val) => { this.value = val; applyAdvancedFileSearch(); })" onchange="debouncedSearch(applyAdvancedFileSearch)" onkeydown="handleFilterKey(event, applyAdvancedFileSearch)" style="font-size:0.6rem; width: 100%; box-sizing: border-box;">
-                                <hr style="margin: 2px 0; border: none; border-top: 1px solid var(--border);">
-                                <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 2px;">
-                                    <input type="text" id="flt-file-inf-yara" placeholder="Inf.Yara" title="Inferred Yara" value="${escapeAttr(p.get('inferred_yara') || '')}" onfocus="attachAutocomplete(this, 'file', 'inferred_yara', (val) => { this.value = val; applyAdvancedFileSearch(); })" onchange="debouncedSearch(applyAdvancedFileSearch)" onkeydown="handleFilterKey(event, applyAdvancedFileSearch)" style="font-size:0.55rem; width: 100%; box-sizing: border-box; background: rgba(0,255,0,0.03);">
-                                    <input type="text" id="flt-file-inf-avtype" placeholder="Inf.AV" title="Inferred AVType" value="${escapeAttr(p.get('inferred_avtype') || '')}" onfocus="attachAutocomplete(this, 'file', 'inferred_avtype', (val) => { this.value = val; applyAdvancedFileSearch(); })" onchange="debouncedSearch(applyAdvancedFileSearch)" onkeydown="handleFilterKey(event, applyAdvancedFileSearch)" style="font-size:0.55rem; width: 100%; box-sizing: border-box; background: rgba(0,255,0,0.03);">
-                                </div>
-                                <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 2px;">
-                                    <input type="text" id="flt-file-inf-type" placeholder="Inf.Type" title="Inferred Type" value="${escapeAttr(p.get('inferred_filetype') || '')}" onfocus="attachAutocomplete(this, 'file', 'inferred_filetype', (val) => { this.value = val; applyAdvancedFileSearch(); })" onchange="debouncedSearch(applyAdvancedFileSearch)" onkeydown="handleFilterKey(event, applyAdvancedFileSearch)" style="font-size:0.55rem; width: 100%; box-sizing: border-box; background: rgba(0,255,0,0.03);">
-                                    <input type="text" id="flt-file-inf-ccip" placeholder="Inf.IP" title="Inferred CC IP" value="${escapeAttr(p.get('inferred_ccip') || '')}" onfocus="attachAutocomplete(this, 'file', 'inferred_ccip', (val) => { this.value = val; applyAdvancedFileSearch(); })" onchange="debouncedSearch(applyAdvancedFileSearch)" onkeydown="handleFilterKey(event, applyAdvancedFileSearch)" style="font-size:0.55rem; width: 100%; box-sizing: border-box; background: rgba(0,255,0,0.03);">
-                                <input type="text" id="flt-file-inf-tags" value="${escapeAttr(p.get('inferred_tags') || '')}" placeholder="Inf.Tags..." title="Namespace-aware inferred tags" onchange="debouncedSearch(applyAdvancedFileSearch)" onkeydown="handleFilterKey(event, applyAdvancedFileSearch)" style="font-size:0.55rem; width: 100%; box-sizing: border-box; background: rgba(0,255,0,0.03);">
-                                </div>
-                            </div>
+                            <input type="text" id="flt-file-inf-tags" value="${escapeAttr(p.get('inferred_tags') || '')}" placeholder="Inf.Tags..." title="Namespace-aware inferred tags" onchange="debouncedSearch(applyAdvancedFileSearch)" onkeydown="handleFilterKey(event, applyAdvancedFileSearch)" style="font-size:0.6rem; width: 100%; box-sizing: border-box; background: rgba(0,255,0,0.03);">
                         </th>
                         <th><input type="text" id="flt-file-batch" placeholder="Batch UUID..." value="${escapeAttr(p.get('batch_uuid') || '')}" onfocus="attachAutocomplete(this, 'file', 'batch_uuid', (val) => { this.value = val; applyAdvancedFileSearch(); })" onchange="debouncedSearch(applyAdvancedFileSearch)" onkeydown="handleFilterKey(event, applyAdvancedFileSearch)" style="font-size:0.65rem; width: 100%; box-sizing: border-box;"></th>
                         <th>
@@ -2127,9 +2145,8 @@ function updateUI(viewKey, collection, params, route, force = false) {
  
         // Sync filter inputs
         if (path === 'files') {
-            syncInput('flt-file-name', 'file_name'); syncInput('flt-file-md5', 'file_md5'); syncInput('flt-file-language', 'language_id'); syncInput('flt-file-yara', 'yara'); syncInput('flt-file-avtype', 'avtype'); syncInput('flt-file-ccip', 'cc_ip');
+            syncInput('flt-file-name', 'file_name'); syncInput('flt-file-md5', 'file_md5'); syncInput('flt-file-language', 'language_id');
             syncInput('flt-file-inf-tags', 'inferred_tags');
-            syncInput('flt-file-inf-yara', 'inferred_yara'); syncInput('flt-file-inf-avtype', 'inferred_avtype'); syncInput('flt-file-inf-type', 'inferred_filetype'); syncInput('flt-file-inf-ccip', 'inferred_ccip');
             syncInput('flt-file-batch', 'batch_uuid'); syncInput('flt-file-min-funcs', 'min_function_count'); syncInput('flt-file-max-funcs', 'max_function_count');
             syncInput('flt-file-note-owner', 'note_owner'); syncInput('flt-file-cluster', 'bin_cluster_uuid'); syncInput('flt-file-cluster-name', 'bin_cluster_name'); syncInput('flt-file-min-cohesion', 'min_cohesion'); syncInput('flt-file-max-cohesion', 'max_cohesion');
             syncInput('flt-file-min-date', 'min_entry_date'); syncInput('flt-file-max-date', 'max_entry_date');
@@ -2568,13 +2585,6 @@ function applyAdvancedFileSearch() {
     const clusterNameFlt = document.getElementById('flt-file-cluster-name')?.value;
     const minCohesionFlt = document.getElementById('flt-file-min-cohesion')?.value;
     const maxCohesionFlt = document.getElementById('flt-file-max-cohesion')?.value;
-    const yaraFlt = document.getElementById('flt-file-yara')?.value;
-    const avtypeFlt = document.getElementById('flt-file-avtype')?.value;
-    const ccipFlt = document.getElementById('flt-file-ccip')?.value;
-    const infYaraFlt = document.getElementById('flt-file-inf-yara')?.value;
-    const infAvtypeFlt = document.getElementById('flt-file-inf-avtype')?.value;
-    const infTypeFlt = document.getElementById('flt-file-inf-type')?.value;
-    const infCcipFlt = document.getElementById('flt-file-inf-ccip')?.value;
     const infTagsFlt = document.getElementById('flt-file-inf-tags')?.value;
 
     if (nameFlt) params.set('file_name', nameFlt); else params.delete('file_name');
@@ -2594,13 +2604,6 @@ function applyAdvancedFileSearch() {
     // bin_cluster_axes is toggled by pill clicks — read back from current params, not from a DOM input
     // (the pills update params directly via toggleBinClusterAxisFilter)
     // so we just preserve whatever is currently in params for this key.
-    if (yaraFlt) params.set('yara', yaraFlt); else params.delete('yara');
-    if (avtypeFlt) params.set('avtype', avtypeFlt); else params.delete('avtype');
-    if (ccipFlt) params.set('cc_ip', ccipFlt); else params.delete('cc_ip');
-    if (infYaraFlt) params.set('inferred_yara', infYaraFlt); else params.delete('inferred_yara');
-    if (infAvtypeFlt) params.set('inferred_avtype', infAvtypeFlt); else params.delete('inferred_avtype');
-    if (infTypeFlt) params.set('inferred_filetype', infTypeFlt); else params.delete('inferred_filetype');
-    if (infCcipFlt) params.set('inferred_ccip', infCcipFlt); else params.delete('inferred_ccip');
     if (infTagsFlt) params.set('inferred_tags', infTagsFlt); else params.delete('inferred_tags');
 
     const noteOwnerFlt = document.getElementById('flt-file-note-owner')?.value;
@@ -3977,8 +3980,9 @@ function renderBinClusters(items) {
 
     return items.map(c => {
         let displayName = c.cluster_name;
-        if (nameType === 'yara' && c.yara_distribution && c.yara_distribution.length > 0) {
-            displayName = c.yara_distribution[0].value;
+        if (nameType === 'yara') {
+            const topYara = window.topTagLabel && window.topTagLabel(c.tag_distribution, 'yara');
+            if (topYara) displayName = topYara;
         }
 
         // Clusters built before function_count_stats was stored have none: show a dash.
@@ -4018,8 +4022,21 @@ function renderBinClusters(items) {
                         <button class="btn-action" title="Rename" onclick="renameBinCluster(${escapeAttr(jsString(c.cluster_id))}, ${escapeAttr(jsString(c.cluster_name || ''))})"><i class="fa-solid fa-pen"></i></button>
                     </div>
                     <div class="dim" style="font-size:0.65rem; display:flex; flex-direction:column; gap:2px;">
-                        ${c.yara_distribution && c.yara_distribution.length ? `<div>Yara: <span style="color:var(--accent)">${c.yara_distribution[0].value} (${c.yara_distribution[0].percent}%)</span></div>` : ''}
-                        ${c.avtype_distribution && c.avtype_distribution.length ? `<div>AV: <span style="color:var(--accent)">${c.avtype_distribution[0].value} (${c.avtype_distribution[0].percent}%)</span></div>` : ''}
+                        ${(() => {
+                            // Plan D3.2/D5a: yara_distribution/avtype_distribution retired --
+                            // tag_distribution's family/yara axes cover the same ground
+                            // (Decision 8). Escaped: tag ids come off uploaded samples.
+                            const td = c.tag_distribution || {};
+                            const topOf = (axis) => {
+                                const nodes = td[axis] || [];
+                                if (!nodes.length) return null;
+                                return nodes.reduce((a, b) => (b.count || 0) > (a.count || 0) ? b : a);
+                            };
+                            const rows = [['Family', topOf('family')], ['Yara', topOf('yara')]];
+                            return rows.map(([label, node]) => node && node.tag_id
+                                ? `<div>${label}: <span style="color:var(--accent)">${escapeHtml(node.tag_id)} (${Math.round((node.coverage || 0) * 100)}%)</span></div>`
+                                : '').join('');
+                        })()}
                     </div>
                 </div>
             </td>

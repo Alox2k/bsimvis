@@ -417,8 +417,9 @@ class BinClusterHierarchy {
 
             let nodes = (data.results || []).map(m => {
                 let displayName = m.cluster_name || `Cluster ${m.cluster_id}`;
-                if (nameType === 'yara' && !m.is_custom_name && m.yara_distribution && m.yara_distribution.length > 0) {
-                    displayName = m.yara_distribution[0].value;
+                if (nameType === 'yara' && !m.is_custom_name) {
+                    const topYara = window.topTagLabel && window.topTagLabel(m.tag_distribution, 'yara');
+                    if (topYara) displayName = topYara;
                 }
                 return {
                     id: String(m.cluster_id),
@@ -455,10 +456,7 @@ class BinClusterHierarchy {
                                 stability: 0,
                                 cohesion: 0,
                                 members: [],
-                                avtype: m.avtype,
-                                filetype: m.filetype,
-                                yara: m.yara,
-                                cc_ip: m.cc_ip
+                                filetype: m.filetype
                             });
                         });
                     }
@@ -704,10 +702,7 @@ class BinClusterHierarchy {
                     d.data.tags,
                     d.data.user_tags,
                     {
-                        avtype: d.data.avtype,
-                        filetype: d.data.filetype,
-                        yara: d.data.yara,
-                        cc_ip: d.data.cc_ip
+                        filetype: d.data.filetype
                     }
                 );
             }
@@ -873,37 +868,8 @@ class BinClusterHierarchy {
         const container = document.getElementById('bin-hier-snippet-container');
         if (!container || !file) return;
 
-        let yaraHtml = '';
-        if (file.yara_matches && file.yara_matches.length > 0) {
-            yaraHtml = `
-                <div style="margin-top: 8px;">
-                    <div style="font-size: 0.6rem; color: var(--subtle); text-transform: uppercase;">Yara Matches</div>
-                    <div style="display: flex; flex-direction: column; gap: 2px;">
-                        ${file.yara_matches.map(y => `<div class="mono" style="font-size: 0.65rem; color: var(--accent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${escapeAttr(y)}">${escapeHtml(y)}</div>`).join('')}
-                    </div>
-                </div>
-            `;
-        } else if (file.yara) {
-             yaraHtml = `
-                <div style="margin-top: 8px;">
-                    <div style="font-size: 0.6rem; color: var(--subtle); text-transform: uppercase;">Yara Match</div>
-                    <div class="mono" style="font-size: 0.65rem; color: var(--accent);">${escapeHtml(file.yara)}</div>
-                </div>
-            `;
-        }
-
-        let ipsHtml = '';
-        if (file.ips && file.ips.length > 0) {
-            ipsHtml = `
-                <div style="margin-top: 8px;">
-                    <div style="font-size: 0.6rem; color: var(--subtle); text-transform: uppercase;">CC IPs</div>
-                    <div style="display: flex; flex-direction: column; gap: 2px;">
-                        ${file.ips.map(ip => `<div class="mono" style="font-size: 0.65rem; color: var(--info);">${escapeHtml(ip)}</div>`).join('')}
-                    </div>
-                </div>
-            `;
-        }
-
+        // Plan D3.2/D5a: yara_matches/ips/avtype retired -- the tag chips
+        // below (av:/yara:/ip:, minted from the same evidence) replace them.
         let tagsHtml = '';
         const allTags = [...(file.tags || []), ...(file.user_tags || [])].filter(t => t && t.trim());
         if (allTags.length > 0) {
@@ -933,10 +899,6 @@ class BinClusterHierarchy {
             
             <div style="display: flex; flex-direction: column; gap: 6px;">
                 <div>
-                    <div style="font-size: 0.6rem; color: var(--subtle); text-transform: uppercase;">AV Type</div>
-                    <div class="mono" style="font-size: 0.7rem; color: var(--meta-text);">${formatArray(file.avtype)}</div>
-                </div>
-                <div>
                     <div style="font-size: 0.6rem; color: var(--subtle); text-transform: uppercase;">File Type</div>
                     <div class="mono" style="font-size: 0.7rem; color: var(--meta-text);">${formatArray(file.filetype)}</div>
                 </div>
@@ -956,8 +918,6 @@ class BinClusterHierarchy {
                     <div style="font-size: 0.6rem; color: var(--subtle); text-transform: uppercase;">Functions</div>
                     <div class="mono" style="font-size: 0.7rem; color: var(--success);">${file.function_count || 0}</div>
                 </div>
-                ${yaraHtml}
-                ${ipsHtml}
                 ${tagsHtml}
             </div>
         `;
@@ -998,10 +958,8 @@ async function loadBinClusterMeta(d, params) {
         const meta = (data.results || []).find(c => String(c.cluster_uuid) === String(d.data.uuid));
         if (!meta) return false;
         d.data.function_count_stats = meta.function_count_stats || {};
-        d.data.yara_distribution = meta.yara_distribution || [];
-        d.data.avtype_distribution = meta.avtype_distribution || [];
-        d.data.filetype_distribution = meta.filetype_distribution || [];
-        d.data.ccip_distribution = meta.ccip_distribution || [];
+        d.data.tag_distribution = meta.tag_distribution || {};
+        d.data.executable_format_distribution = meta.executable_format_distribution || [];
         return true;
     } catch (e) {
         console.error('Failed to fetch cluster metadata', e);
@@ -1033,16 +991,30 @@ function renderBinClusterMetaBlock(data) {
            <span style="color:var(--meta-text); font-weight:bold; margin-left:6px;">${num(s.max)}</span>
            <span class="dim" style="font-size:0.65rem;">max</span>`;
 
+    // Plan D3.2/D5b: yara/avtype/ccip distributions retired -- tag_distribution's
+    // family/yara/ioc axes cover the same ground (Decision 8), Type now reads
+    // executable_format_distribution (Decision 5, ground truth from Ghidra
+    // rather than the imported filetype string).
+    const td = data.tag_distribution || {};
+    const axisTop = (axis) => {
+        const nodes = td[axis] || [];
+        if (!nodes.length) return null;
+        const top = nodes.reduce((a, b) => (b.count || 0) > (a.count || 0) ? b : a);
+        return { value: top.tag_id, percent: Math.round((top.coverage || 0) * 100), extra: nodes.length - 1 };
+    };
+    const listTop = (dist) => {
+        if (!dist || !dist.length) return null;
+        return { value: dist[0].value, percent: dist[0].percent, extra: dist.length - 1 };
+    };
     const dists = [
-        ['Yara', data.yara_distribution],
-        ['AV', data.avtype_distribution],
-        ['Type', data.filetype_distribution],
-        ['IP', data.ccip_distribution],
+        ['Family', axisTop('family')],
+        ['Yara', axisTop('yara')],
+        ['IOC', axisTop('ioc')],
+        ['Type', listTop(data.executable_format_distribution)],
     ];
-    const rows = dists.map(([label, dist]) => {
-        if (!dist || !dist.length) return '';
-        const top = dist[0];
-        const more = dist.length > 1 ? `<span class="dim" style="font-size:0.6rem;"> +${dist.length - 1}</span>` : '';
+    const rows = dists.map(([label, top]) => {
+        if (!top) return '';
+        const more = top.extra > 0 ? `<span class="dim" style="font-size:0.6rem;"> +${top.extra}</span>` : '';
         return `<div style="display:flex; gap:6px; font-size:0.7rem; align-items:baseline;">
             <span class="dim" style="min-width:34px;">${label}</span>
             <span style="color:var(--accent); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${escapeAttr(top.value)}">${escapeHtml(top.value)}</span>
@@ -1442,8 +1414,9 @@ class BinClusterPacking {
 
             let nodes = (data.results || []).map(m => {
                 let displayName = m.cluster_name || `Cluster ${m.cluster_id}`;
-                if (nameType === 'yara' && !m.is_custom_name && m.yara_distribution && m.yara_distribution.length > 0) {
-                    displayName = m.yara_distribution[0].value;
+                if (nameType === 'yara' && !m.is_custom_name) {
+                    const topYara = window.topTagLabel && window.topTagLabel(m.tag_distribution, 'yara');
+                    if (topYara) displayName = topYara;
                 }
                 return {
                     id: String(m.cluster_id),
@@ -1479,10 +1452,7 @@ class BinClusterPacking {
                             stability: 0,
                             cohesion: 0,
                             members: [],
-                            avtype: m.avtype,
-                            filetype: m.filetype,
-                            yara: m.yara,
-                            cc_ip: m.cc_ip
+                            filetype: m.filetype
                         });
                     });
                 });
@@ -1696,10 +1666,7 @@ class BinClusterPacking {
             const el = getBinHierarchyTooltip();
             if (el) el.style.display = 'none';
             if (window.showBinaryPreview) window.showBinaryPreview(d.data.file_md5, d.data.name, d.data.function_count, d.data.language_id, d.data.tags, event, d.data.tags, d.data.user_tags, {
-                avtype: d.data.avtype,
-                filetype: d.data.filetype,
-                yara: d.data.yara,
-                cc_ip: d.data.cc_ip
+                filetype: d.data.filetype
             });
             return;
         }

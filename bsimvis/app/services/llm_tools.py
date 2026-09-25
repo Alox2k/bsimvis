@@ -312,9 +312,8 @@ def search_functions(collection, filters_qs="", limit=25):
 
 
 def get_file_info(collection, file_md5):
-    """Binary-level metadata: filetype, AV classification, YARA/capa hits at
-    the file level, and cluster memberships -- ingest-time findings, not a
-    fresh scan."""
+    """Binary-level metadata: filetype, tags (av:/yara:/ip:/capa: findings),
+    and cluster memberships -- ingest-time findings, not a fresh scan."""
     r = get_redis()
     raw = r.get(f"{collection}:file:{file_md5}:meta")
     if not raw:
@@ -327,7 +326,10 @@ def get_file_info(collection, file_md5):
     from bsimvis.app.services.collection_config import resolve_collection_algo
 
     algo = resolve_collection_algo(collection)
-    if config_service.get("clustering.bin_engine", "hierarchical_snn") == "hierarchical_snn":
+    if (
+        config_service.get("clustering.bin_engine", "hierarchical_snn")
+        == "hierarchical_snn"
+    ):
         algo = f"{algo}:snn"
 
     is_container = bool(file_meta.get("is_container"))
@@ -358,9 +360,7 @@ def get_file_info(collection, file_md5):
         "file_md5": file_md5,
         "file_name": file_meta.get("file_name"),
         "filetype": file_meta.get("filetype"),
-        "avtype": file_meta.get("avtype"),
-        "yara": file_meta.get("yara"),
-        "cc_ip": file_meta.get("cc_ip"),
+        "tags": file_meta.get("tags"),
         "function_count": file_meta.get("function_count"),
         "is_container": is_container,
         "clusters": clusters,
@@ -369,7 +369,8 @@ def get_file_info(collection, file_md5):
 
 def get_cluster_info(collection, cluster_id, algo=None, node_type="file"):
     """Metadata + member distribution for a binary cluster (name, cohesion,
-    yara/avtype/filename distributions, bookmarks/tags already on it).
+    tag_distribution's family/yara/ioc axes, filename distribution,
+    bookmarks/tags already on it).
 
     node_type must match the one get_file_info reported for the cluster:
     container clusters are numbered independently of file clusters."""
@@ -625,8 +626,8 @@ TOOLS = [
             "name": "get_file_info",
             "description": (
                 "Binary-level metadata for a file already in the collection: "
-                "filetype, AV classification, YARA hits, cluster memberships. "
-                "Ingest-time findings, not a fresh scan."
+                "filetype, tags (av:/yara:/ip:/capa: findings), cluster "
+                "memberships. Ingest-time findings, not a fresh scan."
             ),
             "parameters": {
                 "type": "object",
@@ -644,9 +645,9 @@ TOOLS = [
             "name": "get_cluster_info",
             "description": (
                 "Metadata for a binary cluster: name, cohesion score, member "
-                "count, and yara/avtype/filename distributions across members. "
-                "Use to interpret what a function's or file's cluster "
-                "membership implies."
+                "count, and tag_distribution (family/yara/ioc tag axes) plus "
+                "filename distribution across members. Use to interpret what "
+                "a function's or file's cluster membership implies."
             ),
             "parameters": {
                 "type": "object",

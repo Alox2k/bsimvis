@@ -358,10 +358,6 @@ def list_bin_clusters():
                 match = True
                 for kw in keywords:
                     yara_values = [
-                        item.get("value", "").lower()
-                        for item in m.get("yara_distribution", [])
-                        if item.get("value")
-                    ] + [
                         t.lower()
                         for t in flatten_tag_distribution(
                             m.get("tag_distribution") or {}, ("yara", "family")
@@ -391,10 +387,6 @@ def list_bin_clusters():
                 continue
             if cluster_name_q:
                 yara_values = [
-                    item.get("value", "").lower()
-                    for item in m.get("yara_distribution", [])
-                    if item.get("value")
-                ] + [
                     t.lower()
                     for t in flatten_tag_distribution(
                         m.get("tag_distribution") or {}, ("yara", "family")
@@ -555,10 +547,6 @@ def list_bin_clusters():
                 "parent": child_to_parent.get(str(m.get("cluster_id"))),
                 "snippet": m.get("snippet", ""),
                 "sample_members": m.get("sample_members", []),
-                "yara_distribution": m.get("yara_distribution", []),
-                "avtype_distribution": m.get("avtype_distribution", []),
-                "filetype_distribution": m.get("filetype_distribution", []),
-                "ccip_distribution": m.get("ccip_distribution", []),
                 "filename_distribution": m.get("filename_distribution", []),
                 "md5_distribution": m.get("md5_distribution", []),
                 "tag_distribution": normalize_tag_distribution(
@@ -655,10 +643,7 @@ def list_bin_clusters():
                     ),
                     "tags": member_meta_map.get(mid, {}).get("tags", []),
                     "user_tags": member_meta_map.get(mid, {}).get("user_tags", []),
-                    "avtype": member_meta_map.get(mid, {}).get("avtype", []),
                     "filetype": member_meta_map.get(mid, {}).get("filetype", []),
-                    "yara": member_meta_map.get(mid, {}).get("yara", []),
-                    "cc_ip": member_meta_map.get(mid, {}).get("cc_ip", []),
                 }
                 for mid in mids
             ]
@@ -1018,11 +1003,7 @@ def get_bin_cluster_files():
                 "language_id": m.get("language_id", ""),
                 "architecture": m.get("architecture", ""),
                 "function_count": func_count,
-                "avtype": m.get("avtype", []),
                 "filetype": m.get("filetype", []),
-                "yara": m.get("yara", []),
-                "yara_matches": m.get("yara", []),
-                "ips": m.get("cc_ip", []),
                 "first_seen": m.get("first_seen", []),
                 "tags": m.get("tags", []),
                 "user_tags": m.get("user_tags", []),

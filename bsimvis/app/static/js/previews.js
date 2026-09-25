@@ -624,34 +624,15 @@
             return String(val);
         };
 
-        const avtype = formatMeta(extraMeta.avtype);
+        // Plan D3.2/D5a: avtype/yara/cc_ip retired -- the av:/yara:/ip: tag
+        // chips below (tagsHtml) already carry the same evidence.
         const filetype = formatMeta(extraMeta.filetype);
-        const yara = formatMeta(extraMeta.yara) || formatMeta(extraMeta.yara_matches);
-        const cc_ip = formatMeta(extraMeta.cc_ip) || formatMeta(extraMeta.ips);
-        
+
         let extraFieldsHtml = '';
-        if (avtype) {
-            extraFieldsHtml += `<div style="display: flex; justify-content: space-between; font-size: 0.75rem; border-bottom: 1px solid var(--border); padding: 2px 0;">
-                <span style="color: #777; text-transform: uppercase;"><i class="fa-solid fa-shield" style="margin-right: 6px; opacity: 0.5; width: 14px;"></i>AV Type</span>
-                <span class="mono" style="color: var(--meta-text); font-family: 'JetBrains Mono', 'Consolas', monospace; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeAttr(avtype)}">${escapeHtml(avtype)}</span>
-            </div>`;
-        }
         if (filetype) {
             extraFieldsHtml += `<div style="display: flex; justify-content: space-between; font-size: 0.75rem; border-bottom: 1px solid var(--border); padding: 2px 0;">
                 <span style="color: #777; text-transform: uppercase;"><i class="fa-solid fa-file-code" style="margin-right: 6px; opacity: 0.5; width: 14px;"></i>File Type</span>
                 <span class="mono" style="color: var(--meta-text); font-family: 'JetBrains Mono', 'Consolas', monospace; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeAttr(filetype)}">${escapeHtml(filetype)}</span>
-            </div>`;
-        }
-        if (yara) {
-            extraFieldsHtml += `<div style="display: flex; justify-content: space-between; font-size: 0.75rem; border-bottom: 1px solid var(--border); padding: 2px 0;">
-                <span style="color: #777; text-transform: uppercase;"><i class="fa-solid fa-biohazard" style="margin-right: 6px; opacity: 0.5; width: 14px;"></i>Yara</span>
-                <span class="mono" style="color: var(--accent); font-family: 'JetBrains Mono', 'Consolas', monospace; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeAttr(yara)}">${escapeHtml(yara)}</span>
-            </div>`;
-        }
-        if (cc_ip) {
-            extraFieldsHtml += `<div style="display: flex; justify-content: space-between; font-size: 0.75rem; border-bottom: 1px solid var(--border); padding: 2px 0;">
-                <span style="color: #777; text-transform: uppercase;"><i class="fa-solid fa-network-wired" style="margin-right: 6px; opacity: 0.5; width: 14px;"></i>CC IPs</span>
-                <span class="mono" style="color: var(--info, #60a5fa); font-family: 'JetBrains Mono', 'Consolas', monospace; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeAttr(cc_ip)}">${escapeHtml(cc_ip)}</span>
             </div>`;
         }
 

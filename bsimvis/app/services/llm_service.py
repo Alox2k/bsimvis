@@ -690,9 +690,6 @@ class LLMService:
             ("language_id", "Architecture"),
             ("function_count", "Function Count"),
             ("filetype", "File Type"),
-            ("avtype", "AV Classification"),
-            ("yara", "Yara Matches"),
-            ("cc_ip", "C2 IPs"),
         ]:
             val = file_meta.get(key)
             if val:
@@ -701,6 +698,13 @@ class LLMService:
                     val = ", ".join(str(v) for v in val if v)
                 if val:
                     lines.append(f"- **{label}**: {val}")
+
+        # Plan D: av:/yara:/ip: tags replace the avtype/yara/cc_ip fields as
+        # evidence -- minted from the same fields on import (Decision 1), so
+        # this is the same information without the retired keys.
+        tags = file_meta.get("tags")
+        if tags:
+            lines.append(f"- **Tags**: {', '.join(str(t) for t in tags if t)}")
 
         # Binary clusters
         if clusters:
@@ -712,34 +716,47 @@ class LLMService:
                 lines.append(
                     f"\n### Cluster: {name} (cohesion={cohesion:.2f}, members={size})"
                 )
-                for dist_key, dist_label in [
-                    ("yara_distribution", "Yara"),
-                    ("avtype_distribution", "AV Types"),
-                    ("filetype_distribution", "File Types"),
-                    ("ccip_distribution", "C2 IPs"),
-                    ("filename_distribution", "File Names"),
-                ]:
-                    dist = c.get(dist_key)
-                    if dist:
-                        top = sorted(
-                            dist, key=lambda x: x.get("percent", 0), reverse=True
-                        )[:5]
-                        items = ", ".join(
-                            f"{d['value']} ({d.get('percent', 0)}%)"
-                            for d in top
-                            if d.get("value")
-                        )
-                        if items:
-                            lines.append(f"  - {dist_label}: {items}")
+                dist = c.get("filename_distribution")
+                if dist:
+                    top = sorted(dist, key=lambda x: x.get("percent", 0), reverse=True)[
+                        :5
+                    ]
+                    items = ", ".join(
+                        f"{d['value']} ({d.get('percent', 0)}%)"
+                        for d in top
+                        if d.get("value")
+                    )
+                    if items:
+                        lines.append(f"  - File Names: {items}")
 
-        # Inferred metadata
+                # Plan D: tag_distribution replaces the yara/avtype/filetype/
+                # ccip distributions -- av:/yara:/ip: tags cover the same
+                # ground (Decision 8), and filetype's own signal already
+                # lives in executable_format_distribution (Decision 5).
+                for axis_label, axis in (
+                    ("Family", "family"),
+                    ("Yara", "yara"),
+                    ("IOC", "ioc"),
+                ):
+                    nodes = (c.get("tag_distribution") or {}).get(axis) or []
+                    top = sorted(nodes, key=lambda n: n.get("count", 0), reverse=True)[
+                        :5
+                    ]
+                    items = ", ".join(
+                        f"{n['tag_id']} ({round((n.get('coverage') or 0) * 100)}%)"
+                        for n in top
+                        if n.get("tag_id")
+                    )
+                    if items:
+                        lines.append(f"  - {axis_label} tags: {items}")
+
+        # Inferred metadata -- derived from cluster membership, never this
+        # binary's own evidence (Plan D3.6: the only place a derived value
+        # reaches the model, and it is labelled as such here).
         if inferred_meta:
             lines.append("\n## Inferred Metadata (from similar binaries in clusters)")
             for key, label in [
-                ("yara", "Yara"),
-                ("avtype", "AV Family"),
-                ("filetype", "File Type"),
-                ("ccip", "C2 IPs"),
+                ("tags", "Tags"),
                 ("filename", "File Names"),
             ]:
                 data = inferred_meta.get(key, {})

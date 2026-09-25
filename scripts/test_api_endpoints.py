@@ -867,10 +867,7 @@ def test_cluster_expansion_and_bin_sim_cluster_filter():
         missing = [
             k
             for k in (
-                "yara_distribution",
-                "avtype_distribution",
-                "filetype_distribution",
-                "ccip_distribution",
+                "tag_distribution",
                 "filename_distribution",
                 "md5_distribution",
                 "function_count_stats",
@@ -881,6 +878,19 @@ def test_cluster_expansion_and_bin_sim_cluster_filter():
             "bin cluster rows carry every distribution the Metadata tab draws",
             not missing,
             f"missing={missing}",
+        )
+        check(
+            "retired yara/avtype/filetype/ccip distributions are gone from the response (plan D5a)",
+            not any(
+                k in row
+                for k in (
+                    "yara_distribution",
+                    "avtype_distribution",
+                    "filetype_distribution",
+                    "ccip_distribution",
+                )
+            ),
+            f"row keys={sorted(row)}",
         )
         stats = row.get("function_count_stats")
         check(
@@ -2003,6 +2013,16 @@ def run_all_tests():
         },
         label="GET /api/file/search (sorted)",
     )
+    # Plan D5b/Decision 9: inferred_filetype's bucket is gone everywhere
+    # (replaced by executable_format_distribution, Decision 5), so it must
+    # 400 rather than silently match nothing.
+    test_endpoint(
+        "GET",
+        "/api/file/search",
+        params={"collection": COLLECTION, "inferred_filetype": "x"},
+        expected_status=400,
+        label="GET /api/file/search?inferred_filetype= (retired, plan D5b)",
+    )
     if file_md5:
         test_endpoint(
             "GET",
@@ -2039,6 +2059,18 @@ def run_all_tests():
         },
         label="GET /api/function/search (sort by features)",
     )
+
+    # Plan D5a/Decision 9: avtype/yara/cc_ip left INDEX_CONFIG at the func
+    # level (Decision 6), so the retired param must 400 loud rather than
+    # silently match nothing and return every function.
+    for retired_param in ("avtype", "yara", "cc_ip"):
+        test_endpoint(
+            "GET",
+            "/api/function/search",
+            params={"collection": COLLECTION, retired_param: "x"},
+            expected_status=400,
+            label=f"GET /api/function/search?{retired_param}= (retired, plan D5a)",
+        )
     if file_md5:
         print(_color("\n  [File-scope tags]", BOLD))
         # A file tag is true of the file, not of each function in it. It reaches
@@ -2731,6 +2763,43 @@ def run_all_tests():
                 label="GET /api/file/search (by propagated yara)",
             )
 
+            # Plan D1/D5a: propagate_metadata mints av:/yara: tags from the
+            # same avtype/yara fields, and the API surfaces the tags now,
+            # not the legacy fields.
+            tag_body = test_endpoint(
+                "GET",
+                "/api/file/search",
+                params={"collection": COLLECTION, "tag": "av:*test_avtype_propagate*"},
+                label="GET /api/file/search (by minted av: tag)",
+            )
+            tag_rows = (
+                (tag_body.get("files") or []) if isinstance(tag_body, dict) else []
+            )
+            check(
+                "propagated avtype mints a matching av: tag (plan D1)",
+                any(r.get("file_md5") == file_md5 for r in tag_rows),
+                f"rows={[r.get('file_md5') for r in tag_rows]}",
+            )
+            yara_tag_body = test_endpoint(
+                "GET",
+                "/api/file/search",
+                params={
+                    "collection": COLLECTION,
+                    "tag": "yara:*test_yara_rule_propagate*",
+                },
+                label="GET /api/file/search (by minted yara: tag)",
+            )
+            yara_tag_rows = (
+                (yara_tag_body.get("files") or [])
+                if isinstance(yara_tag_body, dict)
+                else []
+            )
+            check(
+                "propagated yara mints a matching yara: tag (plan D1)",
+                any(r.get("file_md5") == file_md5 for r in yara_tag_rows),
+                f"rows={[r.get('file_md5') for r in yara_tag_rows]}",
+            )
+
         bulk_body = test_endpoint(
             "POST",
             "/api/file/metadata/propagate",
@@ -2766,6 +2835,22 @@ def run_all_tests():
                 "/api/file/search",
                 params={"collection": COLLECTION, "yara": "bulk_yara_rule_propagate"},
                 label="GET /api/file/search (by bulk propagated yara)",
+            )
+            bulk_tag_body = test_endpoint(
+                "GET",
+                "/api/file/search",
+                params={"collection": COLLECTION, "tag": "av:*bulk_avtype_propagate*"},
+                label="GET /api/file/search (by bulk-minted av: tag)",
+            )
+            bulk_tag_rows = (
+                (bulk_tag_body.get("files") or [])
+                if isinstance(bulk_tag_body, dict)
+                else []
+            )
+            check(
+                "bulk-propagated avtype mints a matching av: tag (plan D1)",
+                any(r.get("file_md5") == file_md5 for r in bulk_tag_rows),
+                f"rows={[r.get('file_md5') for r in bulk_tag_rows]}",
             )
 
     # ── Collection Params ──────────────────────────────────────────────────

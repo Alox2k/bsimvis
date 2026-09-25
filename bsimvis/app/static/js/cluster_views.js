@@ -1221,7 +1221,7 @@ class ClusterHierarchy extends D3BaseLayout {
                                         if (this.clusterType === 'file') {
                                             return `
                                                 <div style="font-size: 0.7rem; padding: 2px; color: var(--meta-text); font-family: monospace;">
-                                                    ${EntityRenderer.renderFileName(m.file_name, m.file_md5, getCurrentCollection())} ${m.avtype ? `| AV: ${m.avtype}` : ''}
+                                                    ${EntityRenderer.renderFileName(m.file_name, m.file_md5, getCurrentCollection())}
                                                 </div>
                                             `;
                                         }
@@ -2262,7 +2262,7 @@ class ClusterPacking {
                                         if (this.clusterType === 'file') {
                                             return `
                                                 <div style="font-size: 0.7rem; padding: 2px; color: var(--meta-text); font-family: monospace;">
-                                                    ${EntityRenderer.renderFileName(m.file_name, m.file_md5, getCurrentCollection())} ${m.avtype ? `| AV: ${m.avtype}` : ''}
+                                                    ${EntityRenderer.renderFileName(m.file_name, m.file_md5, getCurrentCollection())}
                                                 </div>
                                             `;
                                         }

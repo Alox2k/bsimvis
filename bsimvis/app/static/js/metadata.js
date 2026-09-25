@@ -678,3 +678,20 @@ window.initMetadataTables = function (root) {
 window.renderTagDist = renderTagDist;
 
 window.renderDist = renderDist;
+
+// Plan D, Decision 8: most prevalent leaf under a tag_distribution axis,
+// short form -- mirrors cluster_utils._tag_distribution_label server-side.
+// Used wherever a view used to read the retired yara_distribution/
+// avtype_distribution's top value for a display name.
+window.topTagLabel = function (distribution, axis) {
+    const roots = (distribution || {})[axis];
+    if (!roots || !roots.length) return null;
+    let node = roots.reduce((a, b) => ((b.count || 0) > (a.count || 0) ? b : a));
+    while (node.children && node.children.length) {
+        node = node.children.reduce((a, b) => ((b.count || 0) > (a.count || 0) ? b : a));
+    }
+    const tagId = node.tag_id || '';
+    if (!tagId) return null;
+    const parts = tagId.split(':');
+    return parts[parts.length - 1];
+};

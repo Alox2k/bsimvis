@@ -1293,9 +1293,7 @@ def _file_report_prompt(file_info, summaries):
     ]
     for key, label in [
         ("filetype", "Filetype"),
-        ("avtype", "AV classification"),
-        ("yara", "YARA matches"),
-        ("cc_ip", "C2 IPs"),
+        ("tags", "Tags"),
     ]:
         val = file_info.get(key)
         if val:

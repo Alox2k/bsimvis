@@ -9,6 +9,15 @@ last.
 Revised 2026-09-25 against `dev` at `100bd72`. The 2026-09-24 revision is in
 git history (`5d5c01c`).
 
+**Retirement is complete as of this revision.** D1 through D5b have all
+shipped. `avtype` / `yara` / `cc_ip` are no longer indexed, aggregated,
+searchable through the UI, or returned by the API; only `av:` / `yara:` /
+`ip:` tags carry that evidence now. Gate 0 was run against the real
+collections by the user directly (not reproducible from this worktree, which
+only has the confidential `data/kvrocks/` fixtures never read here) rather
+than through the steps below; they are kept as the historical record of what
+shipped and in what order.
+
 ## Where things stand
 
 - **B, C and E are in.** `av` and `ip` namespaces exist, `tag_distribution` is
@@ -16,16 +25,31 @@ git history (`5d5c01c`).
   coverage (`eb69ba7`, `100bd72`).
 - **D1, D2 and D4 are in** (`56213af`). `import_tags` mints `av:` / `yara:` /
   `ip:` tags at the three merge points. `BACKFILL_IMPORT_TAGS` exists. The old
-  filter params resolve as a union of the tag glob and the legacy field index
-  (`search_file.py:455-461`, `:535-540`). Swagger marks them deprecated.
-- **D3 is partial.** Step 1 (payloads carry `tag_distribution` next to the
-  legacy keys) and step 3 (`file_view.js` inferred tab) are done. Every other
-  view still reads the fields, and the dashboard still offers them as search
-  inputs. That is why they are "still searchable".
-- **D5 has not started.** Every field is still written, indexed, and returned
-  by the API.
-- **Unknown: has D2 run on the real collections and pools?** The whole
-  remaining plan assumes yes. Check it first (see Gate 0).
+  file-level filter params resolve as a union of the tag glob and the legacy
+  field index, permanently (Decision 7). Swagger marks them deprecated.
+- **D3 is done.** Every cluster, dashboard, detail, diff, graph and LLM
+  surface reads `tag_distribution` / `inferred_tags` / tag chips instead of
+  the legacy fields. The dashboard's 7 legacy filter inputs are gone; an old
+  permalink is rewritten into its tag form on load
+  (`dashboard.js` `refreshData`, the `files` branch). The
+  `dashboard.js:4021-4022` XSS gap (`yara_distribution[0].value` into HTML
+  unescaped) is fixed as part of the flip -- the field no longer exists, and
+  its tag-based replacement is escaped.
+- **D5a and D5b are done.** `avtype` / `yara` / `cc_ip` / `inferred_yara` /
+  `inferred_avtype` / `inferred_filetype` / `inferred_ccip` are out of
+  `INDEX_CONFIG`, `SUBSTRING_FIELDS` and `POOL_LOCAL_FIELDS`; cluster meta no
+  longer carries the four legacy `*_distribution` keys; function-level
+  avtype/yara/cc_ip stopped propagating (Decision 6) and now 400 with
+  `RETIRED_FILTER_PARAMS` (`index_config.py`); file-level `inferred_filetype`
+  does the same. The six file-level aliases (`avtype`, `yara`, `cc_ip`,
+  `inferred_avtype`, `inferred_yara`, `inferred_ccip`) keep resolving forever
+  (Decision 7). Old buckets are cleared incidentally by the existing
+  `clear_bin_cluster` / `clear_cluster` jobs (extended to also drop the
+  avtype/yara/cc_ip buckets), not a new one-off job -- run either against a
+  real collection/pool namespace to flush stale entries.
+- Raw `avtype` / `yara` / `cc_ip` values remain stored on file metas
+  (Decision 10) and the CSV importer still emits them; only indexing,
+  aggregation and API output are gone.
 
 ## Context
 
@@ -146,8 +170,8 @@ Tests and scripts: `scripts/test_cluster_meta_freq.py`,
 
 ## Stages
 
-D1, D2, D4 and D3 steps 1 and 3 are done. Their text is kept below for
-reference. The remaining work is Gate 0, D3 steps 2 and 4-6, D5a and D5b.
+Every stage below (D1 through D5b) is done. Their text is kept as the
+historical record of what shipped and in what order.
 
 ### Gate 0 — confirm the backfill
 

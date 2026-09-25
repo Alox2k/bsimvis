@@ -49,14 +49,7 @@ INDEX_CONFIG = {
         "first_seen": ["file"],  # numeric
         "last_seen": ["file"],  # numeric
         "filetype": ["file", "func"],
-        "avtype": ["file", "func"],
-        "yara": ["file", "func"],
-        "cc_ip": ["file", "func"],
         "file_names": ["file", "func"],
-        "inferred_yara": ["file"],
-        "inferred_avtype": ["file"],
-        "inferred_filetype": ["file"],
-        "inferred_ccip": ["file"],
         "inferred_filename": ["file"],
         "inferred_md5": ["file"],
         "inferred_tags": ["file"],
@@ -203,18 +196,11 @@ SUBSTRING_FIELDS = {
     "parent_file_name",
     "related_file_name",
     "file_names",
-    "yara",
-    "avtype",
     "filetype",
-    "cc_ip",
     "cluster_name",
     "bin_cluster_name",
     "parameters",
     "note_owners",
-    "inferred_yara",
-    "inferred_avtype",
-    "inferred_filetype",
-    "inferred_ccip",
     "inferred_filename",
     "inferred_md5",
     "file_name_a",
@@ -375,13 +361,28 @@ POOL_LOCAL_FIELDS = {
     "cluster_uuid",
     "cluster_name",
     "cluster_stability",
-    "inferred_yara",
-    "inferred_avtype",
-    "inferred_filetype",
-    "inferred_ccip",
     "inferred_filename",
     "inferred_md5",
     "inferred_tags",
+}
+
+
+# Plan D, Decision 9: a retired filter param must fail loud, never silently
+# widen or empty a result. Function search dropped avtype/yara/cc_ip entirely
+# (Decision 6: no function-level tag, and file tags already reach function
+# search via ?file_tag=) -- once the field left INDEX_CONFIG, an unrecognized
+# ?avtype= would just match nothing in the config-driven loop and silently
+# return every function. File search keeps avtype/yara/cc_ip (and their
+# inferred_ counterparts, other than inferred_filetype) as permanent aliases
+# onto the tag glob (Decision 7) -- those three keys apply to search_function
+# only, never checked in search_file. inferred_filetype's bucket is gone
+# everywhere (Decision 5: replaced by executable_format_distribution), so it
+# is retired in both routes. Value is the replacement shown in the 400 body.
+RETIRED_FILTER_PARAMS = {
+    "avtype": "file_tag=av:*<value>*",
+    "yara": "file_tag=yara:*<value>*",
+    "cc_ip": "file_tag=ip:*<value>*",
+    "inferred_filetype": "executable_format",
 }
 
 

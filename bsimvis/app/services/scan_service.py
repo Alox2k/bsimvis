@@ -874,12 +874,6 @@ class ScanService:
                             "function_count_stats": meta.get(
                                 "function_count_stats", {}
                             ),
-                            "yara_distribution": meta.get("yara_distribution", []),
-                            "avtype_distribution": meta.get("avtype_distribution", []),
-                            "filetype_distribution": meta.get(
-                                "filetype_distribution", []
-                            ),
-                            "ccip_distribution": meta.get("ccip_distribution", []),
                             "filename_distribution": meta.get(
                                 "filename_distribution", []
                             ),

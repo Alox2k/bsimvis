@@ -426,10 +426,6 @@ class MetadataService:
                         names.append(m["file_name"])
 
                 summary = cluster_summary(decoded_metas, len(members))
-                yara_freq = summary["yara_distribution"]
-                avtype_freq = summary["avtype_distribution"]
-                filetype_freq = summary["filetype_distribution"]
-                ccip_freq = summary["ccip_distribution"]
 
                 cohesion_score = old_cm.get("cohesion_score", 1.0)
                 snippet = names[0] if names else "unknown"
@@ -441,10 +437,6 @@ class MetadataService:
 
                 new_cm = dict(old_cm)
                 new_cm["snippet"] = snippet
-                new_cm["yara_distribution"] = yara_freq
-                new_cm["avtype_distribution"] = avtype_freq
-                new_cm["filetype_distribution"] = filetype_freq
-                new_cm["ccip_distribution"] = ccip_freq
                 new_cm["tag_distribution"] = summary["tag_distribution"]
                 # An empty result means this collection's file metas carry no
                 # function_count yet, not that the cluster has no functions --

@@ -88,9 +88,12 @@ window.CallGraphView = {
                         metaHtml += renderRow('fa-solid fa-file-signature', 'Filename', fileName, 'var(--accent)', true, `const showPanel = window.showFileDetailsPanel || (window.parent && window.parent.showFileDetailsPanel); if(showPanel) { showPanel(${escapeAttr(jsString(collection))}, ${escapeAttr(jsString(file_md5))}, ${escapeAttr(jsString(fileName))}, event); }`);
                         metaHtml += renderRow('fa-solid fa-microchip', 'Architecture', file.language_id || file.language, '#ae81ff');
                         metaHtml += renderRow('fa-solid fa-list-ol', 'Functions', file.function_count, '#a6e22e');
-                        metaHtml += renderRow('fa-solid fa-shield', 'AV Type', file.avtype);
                         metaHtml += renderRow('fa-solid fa-file-code', 'File Type', file.filetype);
-                        metaHtml += renderRow('fa-solid fa-biohazard', 'Yara', file.yara, 'var(--accent)');
+                        // Plan D3.5/D5: avtype/yara/cc_ip retired -- av:/yara:/ip:
+                        // tags carry the same evidence now. Pre-escaped: renderRow
+                        // does not escape, and tag ids come off uploaded samples.
+                        const iocTags = (file.tags || []).filter(t => /^(av:|yara:|ip:)/.test(String(t))).map(escapeHtml);
+                        metaHtml += renderRow('fa-solid fa-tags', 'Tags', iocTags, 'var(--accent)');
                         if (file.first_seen) {
                             metaHtml += renderRow('fa-solid fa-clock', 'First Seen', new Date(window.toEpochMs ? window.toEpochMs(file.first_seen) : file.first_seen).toLocaleString(), 'var(--meta-text-muted)');
                         }

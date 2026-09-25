@@ -13,6 +13,7 @@ from bsimvis.app.services.cluster_utils import (
     normalize_tag_distribution,
 )
 from bsimvis.app.services.config_service import config_service
+from bsimvis.app.services.index_config import RETIRED_FILTER_PARAMS
 from bsimvis.app.services.index_service import (
     query_ids,
     parse_timestamp,
@@ -23,6 +24,12 @@ from bsimvis.app.services.index_service import (
 
 DEFAULT_LIMIT = 100
 
+# Plan D5a: minted into av:/yara:/ip: tags (Decision 1). Still stored on the
+# file meta (Decision 10 -- import_tags reads them for provenance), but the
+# API stops handing them back now that the tags cover the same ground.
+# filetype is NOT here -- Decision 5 keeps it a plain returned field.
+_LEGACY_RAW_FIELDS = ("avtype", "yara", "cc_ip")
+
 
 def search_files():
     try:
@@ -31,6 +38,12 @@ def search_files():
         col = request.args.get("collection")
         if not col and not pool_id:
             return {"error": "No collection or pool specified"}, 400
+
+        if request.args.get("inferred_filetype"):
+            return {
+                "error": "Retired filter param: inferred_filetype. Use "
+                f"{RETIRED_FILTER_PARAMS['inferred_filetype']}"
+            }, 400
 
         if pool_id:
             col = f"global:pool:{pool_id}"
@@ -76,7 +89,6 @@ def search_files():
             ("file_names", "file_names"),
             ("inferred_yara", "inferred_yara"),
             ("inferred_avtype", "inferred_avtype"),
-            ("inferred_filetype", "inferred_filetype"),
             ("inferred_ccip", "inferred_ccip"),
             ("inferred_filename", "inferred_filename"),
             ("inferred_md5", "inferred_md5"),
@@ -266,10 +278,6 @@ def search_files():
                 if (cm.get("cohesion_score") or 0) >= min_cohesion:
                     # Strip huge inferred metadata distributions to keep payload tiny
                     for dist_key in (
-                        "yara_distribution",
-                        "avtype_distribution",
-                        "filetype_distribution",
-                        "ccip_distribution",
                         "filename_distribution",
                         "md5_distribution",
                         "tag_distribution",
@@ -293,6 +301,8 @@ def search_files():
             # Map IDs to metadata
             # We don't map it here anymore, we send the map separately
             normalize_tags(data)
+            for f in _LEGACY_RAW_FIELDS:
+                data.pop(f, None)
 
             if pool_id:
                 enrich_pool_data(data, pool_id)
@@ -548,7 +558,6 @@ def query_files_advanced(r, collection, filters):
             "last_seen",
             "filetype",
             "file_names",
-            "inferred_filetype",
             "inferred_filename",
             "inferred_md5",
             "inferred_tags",
@@ -709,10 +718,6 @@ def get_file_details(collection, file_md5):
         )
 
         inferred_fields = [
-            "yara",
-            "avtype",
-            "filetype",
-            "ccip",
             "filename",
             "tags",
             "md5",
@@ -733,10 +738,6 @@ def get_file_details(collection, file_md5):
             return [v]
 
         existing = {
-            "yara": set(to_list(data.get("yara"))),
-            "avtype": set(to_list(data.get("avtype"))),
-            "filetype": set(to_list(data.get("filetype"))),
-            "ccip": set(to_list(data.get("cc_ip"))),
             "filename": set(
                 to_list(data.get("file_names")) + to_list(data.get("file_name"))
             ),
@@ -755,10 +756,6 @@ def get_file_details(collection, file_md5):
             if cohesion_score >= min_cohesion:
                 cohesion_pct = round(cohesion_score * 100)
                 mapping = {
-                    "yara_distribution": "yara",
-                    "avtype_distribution": "avtype",
-                    "filetype_distribution": "filetype",
-                    "ccip_distribution": "ccip",
                     "filename_distribution": "filename",
                     "md5_distribution": "md5",
                     "architecture_distribution": "architecture",
@@ -809,6 +806,8 @@ def get_file_details(collection, file_md5):
                             }
 
         normalize_tags(data)
+        for f in _LEGACY_RAW_FIELDS:
+            data.pop(f, None)
         for date_field in ["entry_date", "file_date", "first_seen", "last_seen"]:
             if date_field in data:
                 data[date_field] = parse_timestamp(data[date_field])

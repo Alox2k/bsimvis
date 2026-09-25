@@ -429,10 +429,7 @@ window.FileView = {
                 'MD5': 'fa-solid fa-fingerprint',
                 'Batch UUID': 'fa-solid fa-box',
                 'Language': 'fa-solid fa-microchip',
-                'AV Type': 'fa-solid fa-shield',
                 'File Type': 'fa-solid fa-file-code',
-                'Yara': 'fa-solid fa-biohazard',
-                'CC IP': 'fa-solid fa-network-wired',
                 'Functions': 'fa-solid fa-list-ol',
                 'BSim Features': 'fa-solid fa-dna',
                 'First Seen': 'fa-solid fa-clock',
@@ -456,10 +453,7 @@ window.FileView = {
                 ]],
                 ['Classification', [
                     ['Language', file.language_id || file.language],
-                    ['AV Type', file.avtype],
                     ['File Type', file.filetype],
-                    ['Yara', file.yara],
-                    ['CC IP', file.cc_ip],
                 ]],
                 ['Statistics', [
                     ['Functions', file.function_count],
@@ -503,8 +497,7 @@ window.FileView = {
                 const axes = [...this.fvScoreAxes];
                 const inferredKeys = {
                     "File Name": "filename", "MD5": "md5", "Batch UUID": "batch_uuid",
-                    "Language": "architecture", "AV Type": "avtype", "File Type": "filetype",
-                    "Yara": "yara", "CC IP": "ccip", "Executable Format": "executable_format"
+                    "Language": "architecture", "Executable Format": "executable_format"
                 };
                 const bestInference = (key) => axes.reduce((best, axis) => {
                     for (const [value, item] of Object.entries((inferredMeta[axis] || {})[key] || {})) {
@@ -667,9 +660,9 @@ window.FileView = {
                     return out;
                 }, {});
                 const axisMeta = {
-                    filetype: merge("filetype"), architecture: merge("architecture"),
+                    architecture: merge("architecture"),
                     executable_format: merge("executable_format"), batch_uuid: merge("batch_uuid"),
-                    filename: merge("filename"), md5: merge("md5"), avtype: merge("avtype"), ccip: merge("ccip"), tags: {}
+                    filename: merge("filename"), md5: merge("md5"), tags: {}
                 };
                 activeAxes.forEach(axis => Object.entries((inferredMeta[axis] || {}).tags || {}).forEach(([tagAxis, values]) => {
                     axisMeta.tags[tagAxis] = { ...axisMeta.tags[tagAxis], ...merge("tags")[tagAxis] };
@@ -678,14 +671,11 @@ window.FileView = {
                     });
                 }));
                 const inferredCategories = [
-                    ["fa-solid fa-file-code", "File Type", axisMeta.filetype],
                     ["fa-solid fa-microchip", "Architecture", axisMeta.architecture],
                     ["fa-solid fa-file-code", "Executable Format", axisMeta.executable_format],
                     ["fa-solid fa-box", "Batch UUID", axisMeta.batch_uuid],
                     ["fa-solid fa-file", "File Name", axisMeta.filename],
                     ["fa-solid fa-fingerprint", "MD5", axisMeta.md5],
-                    ["fa-solid fa-shield", "AV Type", axisMeta.avtype],
-                    ["fa-solid fa-network-wired", "CC IP", axisMeta.ccip],
                 ];
                 // Plan D3: the file's own gated inferred tags (plan E's
                 // cohesion/coverage gate on the cluster's `tag_distribution`),

@@ -171,10 +171,7 @@ class SimilarityGraph {
                                 user_tags: n.meta.user_tags || [],
                                 file_tags: n.meta.file_tags || [],
                                 file_user_tags: n.meta.file_user_tags || [],
-                                yara: n.meta.yara || n.meta.yara_matches,
-                                avtype: n.meta.avtype,
-                                filetype: n.meta.filetype,
-                                cc_ip: n.meta.cc_ip || n.meta.ips
+                                filetype: n.meta.filetype
                             };
                             this.nodes_map.set(n.id, node_obj);
                             this.unique_nodes.push(node_obj);
@@ -431,10 +428,7 @@ class SimilarityGraph {
                 file_tags: nodes[0].file_tags || [],
                 file_user_tags: nodes[0].file_user_tags || [],
                 extraMeta: {
-                    yara: nodes[0].yara,
-                    avtype: nodes[0].avtype,
-                    filetype: nodes[0].filetype,
-                    cc_ip: nodes[0].cc_ip
+                    filetype: nodes[0].filetype
                 }
             };
         });

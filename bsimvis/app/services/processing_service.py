@@ -290,12 +290,13 @@ class ProcessingService:
             func_meta = dict(func_data.get("function_metadata", {}))
             func_meta["collection"] = collection
 
-            # Copy file-level metadata to function metadata
+            # Copy file-level metadata to function metadata. Plan D, Decision
+            # 6: avtype/yara/cc_ip stop here -- function search already joins
+            # the file's own tags via ?file_tag=, so a function-level copy
+            # (and its func-level av:/yara:/ip: tag, which propagate_func=False
+            # never minted anyway) has no reader left.
             fields_to_copy = [
                 "filetype",
-                "avtype",
-                "yara",
-                "cc_ip",
                 "file_names",
             ]
             for f in fields_to_copy:

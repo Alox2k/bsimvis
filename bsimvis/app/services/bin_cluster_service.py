@@ -586,10 +586,6 @@ class BinClusterService:
                 tag_distribution=summary.get("tag_distribution"),
             )
 
-            yara_freq = summary["yara_distribution"]
-            avtype_freq = summary["avtype_distribution"]
-            filetype_freq = summary["filetype_distribution"]
-            ccip_freq = summary["ccip_distribution"]
             filename_freq = summary["filename_distribution"]
             md5_freq = summary["md5_distribution"]
 
@@ -634,10 +630,6 @@ class BinClusterService:
                 "member_count": len(members),
                 "sample_files": names_list[:5],
                 "sample_members": sample_members,
-                "yara_distribution": yara_freq,
-                "avtype_distribution": avtype_freq,
-                "filetype_distribution": filetype_freq,
-                "ccip_distribution": ccip_freq,
                 "filename_distribution": filename_freq,
                 "md5_distribution": md5_freq,
                 "tag_distribution": summary["tag_distribution"],
@@ -677,10 +669,6 @@ class BinClusterService:
             )
 
             inferred_mapping = {
-                "yara_distribution": "inferred_yara",
-                "avtype_distribution": "inferred_avtype",
-                "filetype_distribution": "inferred_filetype",
-                "ccip_distribution": "inferred_ccip",
                 "filename_distribution": "inferred_filename",
                 "md5_distribution": "inferred_md5",
             }
@@ -1716,10 +1704,6 @@ class BinClusterService:
         retired_member_ids = set()
         if only_nodes is not None:
             inferred_fields = {
-                "yara_distribution": "inferred_yara",
-                "avtype_distribution": "inferred_avtype",
-                "filetype_distribution": "inferred_filetype",
-                "ccip_distribution": "inferred_ccip",
                 "filename_distribution": "inferred_filename",
                 "md5_distribution": "inferred_md5",
             }
@@ -1927,10 +1911,6 @@ class BinClusterService:
                 tag_distribution=summary.get("tag_distribution"),
             )
 
-            yara_freq = summary["yara_distribution"]
-            avtype_freq = summary["avtype_distribution"]
-            filetype_freq = summary["filetype_distribution"]
-            ccip_freq = summary["ccip_distribution"]
             filename_freq = summary["filename_distribution"]
             md5_freq = summary["md5_distribution"]
 
@@ -1989,10 +1969,6 @@ class BinClusterService:
                 "member_count": len(members),
                 "sample_files": names_list[:5],
                 "sample_members": sample_members,
-                "yara_distribution": yara_freq,
-                "avtype_distribution": avtype_freq,
-                "filetype_distribution": filetype_freq,
-                "ccip_distribution": ccip_freq,
                 "filename_distribution": filename_freq,
                 "md5_distribution": md5_freq,
                 "tag_distribution": summary["tag_distribution"],
@@ -2025,10 +2001,6 @@ class BinClusterService:
             # isolated, namespace-aware representation used by new consumers.
             if cohesion_score >= min_cohesion:
                 inferred_mapping = {
-                    "yara_distribution": "inferred_yara",
-                    "avtype_distribution": "inferred_avtype",
-                    "filetype_distribution": "inferred_filetype",
-                    "ccip_distribution": "inferred_ccip",
                     "filename_distribution": "inferred_filename",
                     "md5_distribution": "inferred_md5",
                 }
@@ -2198,6 +2170,13 @@ class BinClusterService:
         self._clear_indexes_via_registry(collection, "file", "bin_cluster_name")
         self._clear_indexes_via_registry(collection, "file", "bin_cluster_uuid")
         self._clear_indexes_via_registry(collection, "file", "bin_cluster_id")
+
+        # Plan D5b: avtype/yara/cc_ip left INDEX_CONFIG (Decision 10 -- the
+        # raw fields stay stored, only indexing/aggregation/API output goes
+        # away). A re-cluster is the natural point to drop the dead buckets.
+        self._clear_indexes_via_registry(collection, "file", "avtype")
+        self._clear_indexes_via_registry(collection, "file", "yara")
+        self._clear_indexes_via_registry(collection, "file", "cc_ip")
 
         # Clear inferred metadata indexes
         self._clear_indexes_via_registry(collection, "file", "inferred_yara")

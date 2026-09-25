@@ -1,7 +1,10 @@
 from flask import request, Response, stream_with_context
 from bsimvis.app.services.llm_service import llm_service
 from bsimvis.app.services.function_service import fetch_function_data
-from bsimvis.app.services.cluster_utils import fetch_bin_cluster_meta
+from bsimvis.app.services.cluster_utils import (
+    fetch_bin_cluster_meta,
+    flatten_tag_distribution,
+)
 from bsimvis.app.services.collection_config import resolve_collection_algo
 import json
 import logging
@@ -329,35 +332,37 @@ def summarize_file():
             return set(v for v in val if v and isinstance(v, str))
         return {val}
 
-    inferred_meta = {k: {} for k in ["yara", "avtype", "filetype", "ccip", "filename"]}
+    # Plan D3.6: yara/avtype/ccip retired from cluster meta -- av:/yara:/ip:
+    # tags in tag_distribution are the inferred evidence now (Decision 1/8).
+    # inferred_meta stays the one place a derived value reaches the model,
+    # labelled as such in the prompt (llm_service.stream_summarize_file).
+    inferred_meta = {"filename": {}, "tags": {}}
+    existing_tags = _to_set(file_meta.get("tags")) | _to_set(file_meta.get("user_tags"))
     existing = {
-        "yara": _to_set(file_meta.get("yara")),
-        "avtype": _to_set(file_meta.get("avtype")),
-        "filetype": _to_set(file_meta.get("filetype")),
-        "ccip": _to_set(file_meta.get("cc_ip")),
         "filename": _to_set(file_meta.get("file_names"))
         | _to_set(file_meta.get("file_name")),
     }
 
     for cm in clusters:
         cohesion_pct = round((cm.get("cohesion_score") or 0) * 100)
-        dist_map = {
-            "yara_distribution": "yara",
-            "avtype_distribution": "avtype",
-            "filetype_distribution": "filetype",
-            "ccip_distribution": "ccip",
-            "filename_distribution": "filename",
-        }
-        for dist_key, meta_key in dist_map.items():
-            for item in cm.get(dist_key) or []:
-                val = item.get("value")
-                if not val or val in existing[meta_key]:
-                    continue
-                if (
-                    val not in inferred_meta[meta_key]
-                    or inferred_meta[meta_key][val]["percent"] < cohesion_pct
-                ):
-                    inferred_meta[meta_key][val] = {"percent": cohesion_pct}
+        for item in cm.get("filename_distribution") or []:
+            val = item.get("value")
+            if not val or val in existing["filename"]:
+                continue
+            if (
+                val not in inferred_meta["filename"]
+                or inferred_meta["filename"][val]["percent"] < cohesion_pct
+            ):
+                inferred_meta["filename"][val] = {"percent": cohesion_pct}
+
+        for tag_id in flatten_tag_distribution(cm.get("tag_distribution") or {}):
+            if tag_id in existing_tags:
+                continue
+            if (
+                tag_id not in inferred_meta["tags"]
+                or inferred_meta["tags"][tag_id]["percent"] < cohesion_pct
+            ):
+                inferred_meta["tags"][tag_id] = {"percent": cohesion_pct}
 
     @stream_with_context
     def generate():

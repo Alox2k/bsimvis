@@ -3316,6 +3316,11 @@ function buildMetaCompareTable(da, db, colA, colB) {
         return String(v);
     };
 
+    const iocTags = (f) => (f.tags || [])
+        .filter(t => /^(av:|yara:|ip:)/.test(String(t)))
+        .slice()
+        .sort();
+
     const fmtDate = (timestamp) => {
         if (!timestamp) return '';
         const d = new Date(window.toEpochMs ? window.toEpochMs(timestamp) : Number(timestamp));
@@ -3328,10 +3333,8 @@ function buildMetaCompareTable(da, db, colA, colB) {
         'MD5': 'fa-solid fa-fingerprint',
         'Batch UUID': 'fa-solid fa-box',
         'Language': 'fa-solid fa-microchip',
-        'AV Type': 'fa-solid fa-shield',
         'File Type': 'fa-solid fa-file-code',
-        'Yara': 'fa-solid fa-biohazard',
-        'CC IP': 'fa-solid fa-network-wired',
+        'Tags (av:/yara:/ip:)': 'fa-solid fa-tags',
         'Functions': 'fa-solid fa-list-ol',
         'BSim Features': 'fa-solid fa-dna',
         'BSim Features': 'fa-solid fa-dna',
@@ -3350,10 +3353,11 @@ function buildMetaCompareTable(da, db, colA, colB) {
         ]],
         ['Classification', [
             ['Language', fa.language_id || fa.language, fb.language_id || fb.language],
-            ['AV Type', fa.avtype, fb.avtype],
             ['File Type', fa.filetype, fb.filetype],
-            ['Yara', fa.yara, fb.yara],
-            ['CC IP', fa.cc_ip, fb.cc_ip],
+            // Plan D3.5/D5: avtype/yara/cc_ip retired -- the tag sets they
+            // mint (av:/yara:/ip:) are the evidence now. Pre-escaped: tag ids
+            // come off uploaded samples and fmt() below does not escape.
+            ['Tags (av:/yara:/ip:)', iocTags(fa).map(escapeHtml), iocTags(fb).map(escapeHtml)],
         ]],
         ['Statistics', [
             ['Functions', fa.function_count, fb.function_count],
@@ -3421,10 +3425,11 @@ function buildMetaCompareTable(da, db, colA, colB) {
         let html = '';
         html += renderInferredRow('fa-solid fa-file', 'File Name', inferredMeta.filename || {}, collection);
         html += renderInferredRow('fa-solid fa-fingerprint', 'MD5', inferredMeta.md5 || {}, collection);
-        html += renderInferredRow('fa-solid fa-shield', 'AV Type', inferredMeta.avtype || {}, collection);
-        html += renderInferredRow('fa-solid fa-file-code', 'File Type', inferredMeta.filetype || {}, collection);
-        html += renderInferredRow('fa-solid fa-biohazard', 'Yara', inferredMeta.yara || {}, collection);
-        html += renderInferredRow('fa-solid fa-network-wired', 'CC IP', inferredMeta.ccip || {}, collection);
+        html += renderInferredRow('fa-solid fa-file-code', 'Executable Format', inferredMeta.executable_format || {}, collection);
+        // Plan D3.5/D5: avtype/yara/ccip retired -- tag_distribution's
+        // family/yara/ioc axes (av:/yara:/ip: tags) flattened into one row.
+        const flatTags = Object.values(inferredMeta.tags || {}).reduce((acc, m) => Object.assign(acc, m), {});
+        html += renderInferredRow('fa-solid fa-tags', 'Tags', flatTags, collection);
         return html || '<div class="dim" style="grid-column: 1 / -1; padding: 10px 0;">No clusters available.</div>';
     };
 
@@ -3474,10 +3479,11 @@ function buildInferredMetaCards(da, db, colA, colB) {
         let html = '';
         html += renderInferredRow('fa-solid fa-file', 'File Name', inferredMeta.filename || {}, collection);
         html += renderInferredRow('fa-solid fa-fingerprint', 'MD5', inferredMeta.md5 || {}, collection);
-        html += renderInferredRow('fa-solid fa-shield', 'AV Type', inferredMeta.avtype || {}, collection);
-        html += renderInferredRow('fa-solid fa-file-code', 'File Type', inferredMeta.filetype || {}, collection);
-        html += renderInferredRow('fa-solid fa-biohazard', 'Yara', inferredMeta.yara || {}, collection);
-        html += renderInferredRow('fa-solid fa-network-wired', 'CC IP', inferredMeta.ccip || {}, collection);
+        html += renderInferredRow('fa-solid fa-file-code', 'Executable Format', inferredMeta.executable_format || {}, collection);
+        // Plan D3.5/D5: avtype/yara/ccip retired -- tag_distribution's
+        // family/yara/ioc axes (av:/yara:/ip: tags) flattened into one row.
+        const flatTags = Object.values(inferredMeta.tags || {}).reduce((acc, m) => Object.assign(acc, m), {});
+        html += renderInferredRow('fa-solid fa-tags', 'Tags', flatTags, collection);
         return html || '<div class="dim" style="grid-column: 1 / -1; padding: 10px 0;">No clusters available.</div>';
     };
 

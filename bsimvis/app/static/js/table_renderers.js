@@ -427,40 +427,16 @@ window.TableRenderers = {
                 <td class="sim-cell">
                     <div style="display:flex; flex-direction:column; gap:2px; font-size:0.65rem;">
                         ${(() => {
-                            const fields = [
-                                { key: 'yara', label: 'Yara', dist: 'yara_distribution' },
-                                { key: 'avtype', label: 'AV', dist: 'avtype_distribution' },
-                                { key: 'filetype', label: 'Type', dist: 'filetype_distribution' },
-                                { key: 'cc_ip', label: 'IP', dist: 'ccip_distribution' }
-                            ];
-                            
-                            return fields.map(field => {
-                                const val = f[field.key];
-                                if (val && val.length) {
-                                    return `<div class="dim">${field.label}: <span style="color:var(--accent)">${escapeHtml(Array.isArray(val) ? val.join(', ') : val)}</span></div>`;
-                                }
-                                
-                                // Try inference
-                                let bestInf = null;
-                                clusters.forEach(c => {
-                                    const dist = c[field.dist] || [];
-                                    if (dist.length > 0) {
-                                        const cohesion = c.cohesion_score || 0;
-                                        if (!bestInf || cohesion > bestInf.cohesion) {
-                                            bestInf = { value: dist[0].value, cohesion: cohesion };
-                                        }
-                                    }
-                                });
-                                
-                                if (bestInf) {
-                                    const hue = Math.max(0, Math.min(120, bestInf.cohesion * 120));
-                                    const color = `hsl(${hue}, var(--color-s-med), var(--color-l-med))`;
-                                    return `<div class="dim" title="Inferred from cluster (cohesion: ${(bestInf.cohesion*100).toFixed(1)}%)">
-                                        ${field.label}: <span style="color:${color}; opacity: 0.9; font-style: italic;">${escapeHtml(bestInf.value)} <small>(${(bestInf.cohesion*100).toFixed(0)}%)</small></span>
-                                    </div>`;
-                                }
-                                return '';
-                            }).join('');
+                            // Plan D3.5/D5: yara/avtype/cc_ip retired -- the file's own tag
+                            // chips (Tags column) carry the av:/yara:/ip: evidence now.
+                            // filetype stays a plain field (Decision 5). Cluster
+                            // distributions were never sent on this listing (stripped
+                            // for payload size), so there was never a real inferred
+                            // fallback to preserve here.
+                            const val = f['filetype'];
+                            return (val && val.length)
+                                ? `<div class="dim">Type: <span style="color:var(--accent)">${escapeHtml(Array.isArray(val) ? val.join(', ') : val)}</span></div>`
+                                : '';
                         })()}
                         ${f['first_seen'] && f['first_seen'].length ? `<div class="dim">Seen: <span style="color:var(--accent)">${escapeHtml(Array.isArray(f['first_seen']) ? f['first_seen'].join(', ') : f['first_seen'])}</span></div>` : ''}
                     </div>

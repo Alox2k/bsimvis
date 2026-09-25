@@ -10,11 +10,12 @@ from collections import Counter, defaultdict
 from bsimvis.app.services.tag_taxonomy import tag_body, tag_policy, tag_prefixes
 
 MAX_CLUSTER_NAME_LEN = 40
+# Plan D5b: yara/avtype/ccip retired from cluster meta -- av:/yara:/ip: tags
+# in tag_distribution cover the same ground (Decision 8). filetype is not
+# here because cluster_dimensions() already builds filetype_distribution off
+# the same (kept, Decision 5) raw field; listing it again just double-built
+# an identical distribution.
 DISTRIBUTION_FIELDS = (
-    "yara",
-    "avtype",
-    "filetype",
-    "ccip",
     "filename",
     "md5",
 )

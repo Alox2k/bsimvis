@@ -2495,6 +2495,13 @@ class ClusterService:
         self._clear_indexes_via_registry(collection, "func", "cluster_name")
         self._clear_indexes_via_registry(collection, "func", "cluster_uuid")
 
+        # Plan D5b: avtype/yara/cc_ip left INDEX_CONFIG at the func level
+        # (Decision 6 -- function search joins the file's own tags instead).
+        # A re-cluster is the natural point to drop the now-dead buckets.
+        self._clear_indexes_via_registry(collection, "func", "avtype")
+        self._clear_indexes_via_registry(collection, "func", "yara")
+        self._clear_indexes_via_registry(collection, "func", "cc_ip")
+
         # 4. Delete tree and cluster list
         r.delete(f"{collection}:cluster:tree:{algo}")
         r.delete(f"{collection}:cluster:list:{algo}")
@@ -3082,10 +3089,6 @@ class ClusterService:
                 tag_distribution=summary.get("tag_distribution"),
             )
 
-            yara_freq = summary["yara_distribution"]
-            avtype_freq = summary["avtype_distribution"]
-            filetype_freq = summary["filetype_distribution"]
-            ccip_freq = summary["ccip_distribution"]
             filename_freq = summary["filename_distribution"]
             md5_freq = summary["md5_distribution"]
 
@@ -3133,10 +3136,6 @@ class ClusterService:
                 "created_at": int(time.time() * 1000),
                 "sample_files": names_list[:5],
                 "sample_members": sample_members,
-                "yara_distribution": yara_freq,
-                "avtype_distribution": avtype_freq,
-                "filetype_distribution": filetype_freq,
-                "ccip_distribution": ccip_freq,
                 "filename_distribution": filename_freq,
                 "md5_distribution": md5_freq,
                 "tag_distribution": summary["tag_distribution"],
@@ -3183,10 +3182,6 @@ class ClusterService:
             # Index top inferred metadata if cohesion is high enough
             if cohesion_score >= min_cohesion_val:
                 inferred_mapping = {
-                    "yara_distribution": "inferred_yara",
-                    "avtype_distribution": "inferred_avtype",
-                    "filetype_distribution": "inferred_filetype",
-                    "ccip_distribution": "inferred_ccip",
                     "filename_distribution": "inferred_filename",
                     "md5_distribution": "inferred_md5",
                 }

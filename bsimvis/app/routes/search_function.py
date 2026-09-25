@@ -17,6 +17,7 @@ from bsimvis.app.services.query_syntax import resolve_targets
 from bsimvis.app.services.config_service import config_service
 from bsimvis.app.services.collection_config import resolve_collection_algo
 from bsimvis.app.services.tag_taxonomy import NAMESPACE_POLICY, USER_POLICY, tag_policy
+from bsimvis.app.services.index_config import RETIRED_FILTER_PARAMS
 from bsimvis.app.services.bin_sim_tags import LIBRARY_ORIGIN_PREFIXES, is_library_tag
 
 DEFAULT_LIMIT = 100
@@ -60,6 +61,13 @@ def search_functions():
             col = f"global:pool:{pool_id}"
         else:
             pool_id = get_pool_id(col)
+
+        retired = [p for p in ("avtype", "yara", "cc_ip") if request.args.get(p)]
+        if retired:
+            return {
+                "error": f"Retired filter param(s): {', '.join(retired)}. Use "
+                + ", ".join(f"{p}={RETIRED_FILTER_PARAMS[p]}" for p in retired)
+            }, 400
 
         session_id = str(uuid.uuid4())[:8]
 
@@ -263,7 +271,10 @@ def search_functions():
             if score_axis == "library":
                 if not library_matches:
                     return {
-                        "total": 0, "functions": [], "offset": offset, "limit": limit,
+                        "total": 0,
+                        "functions": [],
+                        "offset": offset,
+                        "limit": limit,
                         "score_axis": score_axis,
                     }
                 add_group(library_matches, field_name="score_axis:library")
