@@ -6,21 +6,26 @@ PR E ([plan_e_inferred_tag_gate.md](plan_e_inferred_tag_gate.md): the
 `inferred:` namespace and a gate that makes `inferred_tags` trustworthy). Ships
 last.
 
-Revised 2026-09-24 against `dev` at `5f7f243`.
+Revised 2026-09-25 against `dev` at `100bd72`. The 2026-09-24 revision is in
+git history (`5d5c01c`).
 
 ## Where things stand
 
-- **B is in.** `NAMESPACE_POLICY` has `av` (`family` axis, writers
-  `import`/`analysis`) and `ip` (`ioc` axis, `aggregate=False`,
-  `vocabulary=False`). `tag_taxonomy.av_tag` parses a vendor label into
-  `av:<vendor>:<family>#<label>` and has a demo check.
-- **C is mostly in.** `cluster_summary` is the one summary function,
-  `tag_distribution` is written on every cluster path, and `inferred_tags` is
-  indexed and filterable. Its gaps are PR E.
-- **None of D has started.** `av_tag` is called only from its own demo. No
-  writer mints `av:`, `ip:` or import-side `yara:` tags from the CSV columns, so
-  `tag_distribution` has no `family` or `ioc` rows for any imported data today.
-  The `family` axis is fed only by rulezet galaxies.
+- **B, C and E are in.** `av` and `ip` namespaces exist, `tag_distribution` is
+  written on every cluster path, and `inferred_tags` is gated on cohesion and
+  coverage (`eb69ba7`, `100bd72`).
+- **D1, D2 and D4 are in** (`56213af`). `import_tags` mints `av:` / `yara:` /
+  `ip:` tags at the three merge points. `BACKFILL_IMPORT_TAGS` exists. The old
+  filter params resolve as a union of the tag glob and the legacy field index
+  (`search_file.py:455-461`, `:535-540`). Swagger marks them deprecated.
+- **D3 is partial.** Step 1 (payloads carry `tag_distribution` next to the
+  legacy keys) and step 3 (`file_view.js` inferred tab) are done. Every other
+  view still reads the fields, and the dashboard still offers them as search
+  inputs. That is why they are "still searchable".
+- **D5 has not started.** Every field is still written, indexed, and returned
+  by the API.
+- **Unknown: has D2 run on the real collections and pools?** The whole
+  remaining plan assumes yes. Check it first (see Gate 0).
 
 ## Context
 
@@ -121,8 +126,42 @@ Tests and scripts: `scripts/test_cluster_meta_freq.py`,
 8. **Cluster naming moves to tags.** `default_bin_cluster_name` prefers the top
    `family` row of `tag_distribution`, then the top `yara` row, then the filename.
    The order is the same as today; only the source changes.
+9. **A retired param never silently widens or empties a result.** Removing a
+   field from `INDEX_CONFIG` changes two search paths without an error:
+   - Function search builds its filters from `INDEX_CONFIG`
+     (`search_function.py:297-310`). `?avtype=` / `?yara=` / `?cc_ip=` then stop
+     being read, and the search returns every function.
+   - File search's `?inferred_filetype=` has no tag alias. Its bucket is cleared,
+     so it matches nothing.
+
+   One constant, `RETIRED_FILTER_PARAMS`, lists every retired name. Both routes
+   return 400 on a retired name that has no alias, with the replacement in the
+   message (`file_tag=av:*<x>*`, `executable_format`). The six aliased file
+   params stay as aliases for good, because they cost one dict. Nothing in the
+   UI sends the retired names after D3.
+10. **Raw file fields stay stored.** `import_tags` reads `avtype` / `yara` /
+    `cc_ip` off the file meta, and they are the provenance of the tag. D5 stops
+    indexing, aggregating and returning them. It does not stop storing them at
+    file level. The function-level copies do stop (Decision 6).
 
 ## Stages
+
+D1, D2, D4 and D3 steps 1 and 3 are done. Their text is kept below for
+reference. The remaining work is Gate 0, D3 steps 2 and 4-6, D5a and D5b.
+
+### Gate 0 — confirm the backfill
+
+On every real collection, and after it every pool:
+
+1. Run `bsimvis metadata backfill-tags` (D2) if it has not run.
+2. Re-cluster so `tag_distribution` has `family` and `ioc` rows.
+3. Sample 50 files that carry `avtype` / `yara` / `cc_ip`. Each must carry the
+   matching `av:` / `yara:` / `ip:` tag.
+4. For 10 real filter values, compare the old field search to the tag search:
+   `?avtype=x` against `?tag=av:*x*`. Same result set, or a difference you can
+   explain.
+
+A view flipped before this gate shows empty cluster cards.
 
 ### D1 — mint on write
 
@@ -154,20 +193,51 @@ one small JS renderer for a `tag_distribution` axis, shared by the views, before
 flipping them. `cluster_detail_view.js:507` already walks the shape and is the
 starting point.
 
-Order, one commit each:
+Order, one commit each. Line numbers are as of `100bd72`.
 
-1. `routes/bin_cluster.py` and `scan_service.py` payloads: add the tag axes next
-   to the legacy keys.
-2. `bin_cluster_views.js`, `cluster_views.js`, `previews.js`
-3. `views/file_view.js` inferred tab: from `inferred_*` to `inferred_tags` (gated
-   by PR E)
-4. `dashboard.js` filters and columns
-5. `binary_similarity.js`, `similarity_graph.js`, `table_renderers.js`,
-   `call_graph_view.js`
-6. The LLM surfaces (`llm.py`, `llm_service.py`, `llm_tools.py`,
-   `analysis_orchestrator.py`). This changes what the model sees. `inferred:`
-   tags stay out of evidence entirely: `llm.py:332`'s `inferred_meta` section is
-   the only place they appear, labelled as derived.
+1. **Done.** `routes/bin_cluster.py` and `scan_service.py` payloads carry
+   `tag_distribution` next to the legacy keys.
+2. **Cluster views.** Extract the axis renderer first, from
+   `cluster_detail_view.js:507`. Then flip `bin_cluster_views.js` (31
+   references), `cluster_views.js` (2), `previews.js:629-654` and the dashboard
+   cluster cards (`dashboard.js:3980-3981` naming, `:4021-4022` summary). The
+   cards at `:4021-4022` put `yara_distribution[0].value` into HTML without
+   `escapeHtml`. That value comes off a sample, so the flip must escape the tag
+   id. Also check why `scripts/test_xss_escaping.js` does not flag these lines.
+3. **Done.** `views/file_view.js` inferred tab reads `inferred_tags`.
+4. **Dashboard file search.** This is the step that stops the fields being
+   searchable in the UI.
+   - Delete the seven inputs `flt-file-yara`, `flt-file-avtype`, `flt-file-ccip`,
+     `flt-file-inf-yara`, `flt-file-inf-avtype`, `flt-file-inf-type`,
+     `flt-file-inf-ccip` (`dashboard.js:1838-1848`), their `syncInput` calls
+     (`:2130`, `:2132`) and their `params.set` lines (`:2571-2603`).
+   - The replacement already exists: the tag filter cards (`tag` param) and
+     the `flt-file-inf-tags` input.
+   - Old permalinks: when the view loads, rewrite each legacy param into its
+     tag form and drop it from the URL. `avtype=x` becomes `tag=av:*x*`,
+     `yara=x` becomes `tag=yara:*x*`, and `cc_ip=x` becomes `tag=ip:*x*`. This is
+     the same glob the server alias uses (`search_file.py:537`). `inferred_*=x`
+     moves into `inferred_tags` only when that param is empty. Otherwise it stays
+     in the URL and the server alias resolves it. Without the rewrite, a
+     permalink applies a filter that no input shows.
+   - `attachAutocomplete(..., 'yara' | 'avtype' | 'cc_ip')` goes with the
+     inputs. The autocomplete route has nothing to change.
+5. **Detail, diff and graph views.** `views/file_view.js` (the "CC IP" row at
+   `:462` and the other raw-field rows), `binary_similarity.js:3356` (the diff
+   row), `similarity_graph.js:174-177`, `:437`, `table_renderers.js:434` (the
+   `cc_ip` column) and `views/call_graph_view.js`. Delete the rows. The tag
+   chips already show the same values. Before deleting the diff row, check that
+   `binary_similarity.js` shows a tag diff. If it does not, one row that
+   compares the `ip:` / `av:` / `yara:` tag sets replaces it.
+6. **LLM surfaces.** `llm.py:332-348`, `llm_service.py:693-742`,
+   `llm_tools.py:361-372`, `:647`, `analysis_orchestrator.py:1296-1298`. This
+   changes what the model sees. `inferred:` tags stay out of evidence entirely:
+   `llm.py`'s `inferred_meta` section is the only place they appear, labelled as
+   derived. The MCP server re-exports `llm_tools`, so check its tool
+   descriptions too.
+
+After step 6, grep the JS and the LLM files for the field names. Only the
+permalink rewrite in step 4 may still name them.
 
 ### D4 — filter aliases
 
@@ -178,19 +248,73 @@ params, marked deprecated.
 
 ### D5 — delete
 
-Remove the retired fields from `INDEX_CONFIG` (file and func),
-`SUBSTRING_FIELDS`, `POOL_LOCAL_FIELDS`, `list_fields`, `processing_service`'s
-`fields_to_copy`, `collect_member_values`, `DISTRIBUTION_FIELDS`, the cluster
-meta writers (the four `*_distribution` keys and the legacy `inferred_mapping`
-blocks in `bin_cluster_service` and `cluster_service`), the swagger model, and
-the CLI parsers' field output. Clear the buckets with
-`_clear_indexes_via_registry`, as `clear_clusters` does now.
+D5 is split so the API stops exposing the fields before anything is dropped
+from storage. D5a is code only and reverts with `git revert`. D5b is the
+one-way step.
+
+#### D5a — the API stops returning and reading the fields
+
+Start after D3 step 6. No UI reads these keys by then.
+
+- **Responses.** Drop the legacy keys from `bin_cluster.py:558-561` (the four
+  `*_distribution` keys), `:661` (member `cc_ip`), `:1024-1025` (`yara_matches`,
+  `ips`) and `scan_service.py:877-882`. Drop them from `search_file.py`'s
+  projection and inferred computation (`:266-277`, `:712-765`). Keep
+  `executable_format`, `filename` and `md5` there. Drop them from the swagger
+  response model (`swagger.py:782-813`).
+- **Cluster search.** `bin_cluster.py:360-400` matches keywords against both
+  `yara_distribution` and `tag_distribution`. Keep only the tag half.
+- **Filters.** Add `RETIRED_FILTER_PARAMS` (Decision 9). It is checked in
+  `search_file.py` before the filter map at `:62-87` and in
+  `search_function.py` before its `INDEX_CONFIG` loop at `:297`. The
+  function-level `avtype` / `yara` / `cc_ip` params return 400 from this
+  point, not at D5b, so nothing depends on them when D5b removes them. Swagger
+  lists the aliased params as deprecated and drops the others.
+- **Tests.** `scripts/test_api_endpoints.py:871` asserts `avtype_distribution`;
+  change it to assert `tag_distribution`. `:2705` and `:2742` propagate
+  `avtype`; add an assert that the `av:` tag appears. Add one check per retired
+  function param that returns 400. `scripts/test_cluster_meta_freq.py` and
+  `scripts/test_default_bin_cluster_name.py` move with Decision 8.
+
+#### D5b — stop writing and unindex
+
+Start after D5a has run on a real collection for a while with no complaints.
+
+- Remove `avtype` / `yara` / `cc_ip` and `inferred_yara` / `inferred_avtype` /
+  `inferred_filetype` / `inferred_ccip` from `INDEX_CONFIG`
+  (`index_config.py:52-59`, file and func), `SUBSTRING_FIELDS` (`:206-217`)
+  and `POOL_LOCAL_FIELDS` (`:378-381`).
+- Remove them from `metadata_service.list_fields` (`:203-208`),
+  `processing_service`'s function-level copy (`:286-298`),
+  `cluster_utils.collect_member_values` / `DISTRIBUTION_FIELDS` (`:80`,
+  `:108-110`), and `default_bin_cluster_name`'s fallback.
+- Remove the cluster meta writers: the four `*_distribution` keys and the
+  `inferred_mapping` blocks in `bin_cluster_service.py:680`, `:1719`, `:2028`
+  and `cluster_service.py:3186`. `inferred_filename` and `inferred_md5` stay.
+- In `search_file.py`, the alias drops its legacy half (`:538-540`) and becomes
+  a tag glob only. `inferred_filetype` moves into `RETIRED_FILTER_PARAMS`.
+- Clear the buckets with `_clear_indexes_via_registry` (already used for the
+  inferred fields at `bin_cluster_service.py:2203-2206`). It walks the registry,
+  never `KEYS`. Run it once per collection and once per pool namespace
+  `global:pool:{id}` through a clear job on `jobs:pending:high`. Add no new
+  `JobType` if an existing maintenance action can take a field list.
+- The CLI parsers (`bsimvis_metadata.py:40`, `bsimvis_upload.py:741`) keep
+  emitting the fields. The server stores them and mints tags from them
+  (Decision 10).
 
 Field values in stored file metas are left in place. They are inert once nothing
 indexes or reads them, and removing them means rewriting every meta for no user
 benefit.
 
 The CSV columns keep their names. The upload format is a user contract.
+
+#### Not retired
+
+- `filetype` (Decision 5), `file_names`, `inferred_filename`, `inferred_md5`.
+- The `yara:` tags that YARA scans write. Only the imported `yara` field is
+  retired.
+- Free-text `q` loses its substring hits on the raw fields. It still searches
+  the `tags` field, so `q=mirai` still finds `av:unknown:mirai`.
 
 ## Risk
 
