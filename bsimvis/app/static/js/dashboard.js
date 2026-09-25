@@ -710,7 +710,9 @@ async function refreshData(appendArg = false, force = false, skipHeader = false)
         if (!params.has('min_cohesion')) {
             params.set('min_cohesion', '0.5');
         }
-        if (!params.has('score_axis')) {
+        // A cluster link must show the whole cluster; the code axis hides
+        // lib:* functions, so a library cluster would render empty.
+        if (!params.has('score_axis') && !params.has('cluster_uuid') && !params.has('cluster_id')) {
             params.set('score_axis', 'code');
         }
     } else if (viewKey === 'binary-similarity') {
