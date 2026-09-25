@@ -16,6 +16,7 @@ from bsimvis.app.services.lua_manager import lua_manager
 from bsimvis.app.services.query_syntax import resolve_targets
 from bsimvis.app.services.config_service import config_service
 from bsimvis.app.services.collection_config import resolve_collection_algo
+from bsimvis.app.services.cluster_utils import resolve_cluster_id_by_uuid
 from bsimvis.app.services.tag_taxonomy import NAMESPACE_POLICY, USER_POLICY, tag_policy
 from bsimvis.app.services.index_config import RETIRED_FILTER_PARAMS
 from bsimvis.app.services.bin_sim_tags import LIBRARY_ORIGIN_PREFIXES, is_library_tag
@@ -55,33 +56,13 @@ def _cluster_members_key(r, col, algo, field, val):
     hierarchical_uf only indexes each function under its cohesion-cut
     primary cluster, so lower-cohesion ancestors have a :meta and a full
     :members set but no cluster_uuid/cluster_id bucket.
-
-    ponytail: one GET per tree node on a uuid miss; add a uuid -> cid hash
-    at persist time if trees get big enough for this to show up.
     """
     base = f"{col}:cluster:{algo}"
-    if field == "cluster_id":
-        key = f"{base}:{val}:members"
-        return key if r.exists(key) else None
-
-    cids = {
-        c.decode() if isinstance(c, bytes) else c
-        for c in r.smembers(f"{col}:cluster:list:{algo}")
-    }
-    try:
-        for link in json.loads(r.get(f"{col}:cluster:tree_links:{algo}") or "[]"):
-            cids.update((str(link["parent"]), str(link["child"])))
-    except (ValueError, KeyError, TypeError):
-        pass
-    cids = sorted(cids)
-    pipe = r.pipeline(transaction=False)
-    for cid in cids:
-        pipe.get(f"{base}:{cid}:meta")
-    val = val.lower()
-    for cid, raw in zip(cids, pipe.execute()):
-        if raw and str(json.loads(raw).get("cluster_uuid", "")).lower() == val:
-            return f"{base}:{cid}:members"
-    return None
+    cid = (
+        val if field == "cluster_id" else resolve_cluster_id_by_uuid(r, col, algo, val)
+    )
+    key = f"{base}:{cid}:members"
+    return key if cid and r.exists(key) else None
 
 
 def search_functions():

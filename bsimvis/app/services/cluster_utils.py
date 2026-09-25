@@ -5,6 +5,7 @@ bin_sim_service, similarity_service and cluster_service.
 """
 
 import json
+import time
 from collections import Counter, defaultdict
 
 from bsimvis.app.services.tag_taxonomy import tag_body, tag_policy, tag_prefixes
@@ -649,11 +650,9 @@ def get_tree_links(r, collection, algo, tree_links_prefix="cluster"):
 def resolve_cluster_id_by_uuid(r, collection, algo, uuid, meta_prefix="cluster"):
     """cluster_id for a uuid via the small uf:uuid hash, not a full meta scan.
 
-    ponytail: the hierarchical_snn/HDBSCAN engine never writes that hash (its
-    labels come from a fresh uuid.uuid4() per build, kept only in the meta
-    blob) -- fall back to one full meta scan in that case. Still only paid
-    once per re-center, never on every child expand/"+more" page, which is
-    what made the old sidebar slow.
+    The hierarchical_snn/HDBSCAN engine never writes that hash (its labels
+    come from a fresh uuid.uuid4() per build, kept only in the meta blob) --
+    fall back to a cached map built by one pipelined meta scan.
     """
     uuid = str(uuid or "").lower()
     if not uuid:
@@ -668,6 +667,30 @@ def resolve_cluster_id_by_uuid(r, collection, algo, uuid, meta_prefix="cluster")
     if pairs:
         return None  # hash exists and was checked; a real miss, not "unwritten"
 
+    ns = (collection, algo, meta_prefix)
+    meta_key_prefix = f"{collection}:{meta_prefix}:{algo}:"
+    cached = _UUID_MAPS.get(ns, {}).get(uuid)
+    if cached:
+        # A rebuild re-mints uuids: trust the cache only if the meta still agrees.
+        m = get_cluster_metas(r, collection, algo, [cached], meta_prefix).get(cached)
+        if m and str(m.get("cluster_uuid", "")).lower() == uuid:
+            return cached
+    elif ns in _UUID_MAPS and time.time() - _UUID_MAPS_AT[ns] < 30:
+        return None  # map is fresh; don't rescan for a bogus uuid
+
+    _UUID_MAPS[ns] = _scan_uuid_map(r, collection, algo, meta_prefix)
+    _UUID_MAPS_AT[ns] = time.time()
+    return _UUID_MAPS[ns].get(uuid)
+
+
+# ponytail: per-process uuid -> cid maps for engines with no uf:uuid hash;
+# one pipelined meta scan per rebuild, then O(1). Persist a uuid hash at build
+# time if the first-hit scan (~3s at 130k clusters) becomes a problem.
+_UUID_MAPS = {}
+_UUID_MAPS_AT = {}
+
+
+def _scan_uuid_map(r, collection, algo, meta_prefix):
     list_key = f"{collection}:{meta_prefix}:list:{algo}"
     meta_key_prefix = f"{collection}:{meta_prefix}:{algo}:"
     cids_raw = r.smembers(list_key) or set()
@@ -684,17 +707,29 @@ def resolve_cluster_id_by_uuid(r, collection, algo, uuid, meta_prefix="cluster")
                 cids_raw.add(k[len(meta_key_prefix) : -len(":meta")])
             if cursor == 0:
                 break
-    for cid in cids_raw:
-        cid = cid.decode() if isinstance(cid, bytes) else cid
-        blob = r.get(f"{meta_key_prefix}{cid}:meta")
-        if not blob:
-            continue
-        m = json.loads(blob) if not isinstance(blob, dict) else blob
-        if isinstance(m, str):
-            m = json.loads(m)
-        if str(m.get("cluster_uuid", "")).lower() == uuid:
-            return cid
-    return None
+    cids = {c.decode() if isinstance(c, bytes) else str(c) for c in cids_raw}
+    # The list set can lag an incremental rebuild; tree_links never does.
+    c2p, _ = get_tree_links(r, collection, algo, meta_prefix)
+    cids.update(c2p)
+    cids.update(c2p.values())
+    cids = list(cids)
+
+    out = {}
+    for i in range(0, len(cids), 5000):
+        chunk = cids[i : i + 5000]
+        pipe = r.pipeline(transaction=False)
+        for cid in chunk:
+            pipe.get(f"{meta_key_prefix}{cid}:meta")
+        for cid, blob in zip(chunk, pipe.execute()):
+            if not blob:
+                continue
+            m = json.loads(blob)
+            if isinstance(m, str):
+                m = json.loads(m)
+            u = str(m.get("cluster_uuid") or "").lower()
+            if u:
+                out[u] = cid
+    return out
 
 
 def get_cluster_metas(r, collection, algo, cids, meta_prefix="cluster"):
@@ -727,6 +762,7 @@ def cluster_tree_slice(
     width=10,
     meta_prefix="cluster",
     tree_links_prefix=None,
+    links=None,
 ):
     """A bounded window of the cluster tree around `uuid`, cheap at any collection size.
 
@@ -736,7 +772,7 @@ def cluster_tree_slice(
     can render "N more above" without walking further.
     """
     tree_links_prefix = tree_links_prefix or meta_prefix
-    child_to_parent, parent_to_children = get_tree_links(
+    child_to_parent, parent_to_children = links or get_tree_links(
         r, collection, algo, tree_links_prefix
     )
     center = resolve_cluster_id_by_uuid(r, collection, algo, uuid, meta_prefix)
@@ -779,7 +815,14 @@ def cluster_tree_slice(
 
 
 def cluster_children_page(
-    r, collection, algo, parent_cid, offset=0, width=10, meta_prefix="cluster"
+    r,
+    collection,
+    algo,
+    parent_cid,
+    offset=0,
+    width=10,
+    meta_prefix="cluster",
+    links=None,
 ):
     """One page of a single node's children, sorted by member_count desc.
 
@@ -788,7 +831,7 @@ def cluster_children_page(
     single extra parent hop this covers it). Bounded by that node's own
     fan-out, never the whole collection.
     """
-    _, parent_to_children = get_tree_links(r, collection, algo, meta_prefix)
+    _, parent_to_children = links or get_tree_links(r, collection, algo, meta_prefix)
     child_ids = parent_to_children.get(str(parent_cid), [])
     metas = get_cluster_metas(r, collection, algo, child_ids, meta_prefix)
     ranked = sorted(

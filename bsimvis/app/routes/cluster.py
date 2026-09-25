@@ -11,6 +11,7 @@ from bsimvis.app.services.cluster_utils import (
     cluster_tree_slice,
     cluster_children_page,
     get_tree_links,
+    resolve_cluster_id_by_uuid,
 )
 from bsimvis.app.services.index_service import get_pool_id
 from bsimvis.app.services.query_syntax import parse_filter_value
@@ -282,6 +283,19 @@ def _get_matching_ids(r, collection, level, field, val):
     return matching_ids
 
 
+def _structural_direct_members(r, collection, algo, cid, parent_to_children):
+    """Members not in any child subtree.
+
+    The stored :direct_members set is the cohesion-cut assignment, so a cut
+    node lists its whole subtree and every node below the cut lists nothing.
+    """
+    base = f"{collection}:cluster:{algo}"
+    if not r.exists(f"{base}:{cid}:members"):
+        return r.smembers(f"{base}:{cid}:direct_members")
+    kids = [f"{base}:{c}:members" for c in parent_to_children.get(cid, [])]
+    return r.sdiff(f"{base}:{cid}:members", *kids)
+
+
 def _shape_cluster_result(m, child_to_parent, parent_to_children, is_pool, pool_id):
     """meta blob -> the dict shape the UI expects (parent, has_children, distributions)."""
     raw_samples = m.get("sample_members") or m.get("sample_functions") or []
@@ -342,10 +356,11 @@ def _list_clusters_slice(collection, algo, is_pool, pool_id, r):
     if parent_q:
         width = request.args.get("width", 10, type=int)
         offset = request.args.get("offset", 0, type=int)
+        links = get_tree_links(r, collection, algo)
+        _, parent_to_children = links
         metas, total_children = cluster_children_page(
-            r, collection, algo, parent_q, offset=offset, width=width
+            r, collection, algo, parent_q, offset=offset, width=width, links=links
         )
-        _, parent_to_children = get_tree_links(r, collection, algo)
         child_to_parent = {cid: parent_q for cid in metas}
         results = [
             _shape_cluster_result(
@@ -365,10 +380,11 @@ def _list_clusters_slice(collection, algo, is_pool, pool_id, r):
     up = request.args.get("up", 3, type=int)
     down = request.args.get("down", 3, type=int)
     width = request.args.get("width", 10, type=int)
+    links = get_tree_links(r, collection, algo)
+    child_to_parent, parent_to_children = links
     metas, center, hidden_above = cluster_tree_slice(
-        r, collection, algo, slice_uuid, up=up, down=down, width=width
+        r, collection, algo, slice_uuid, up=up, down=down, width=width, links=links
     )
-    child_to_parent, parent_to_children = get_tree_links(r, collection, algo)
     results = [
         _shape_cluster_result(m, child_to_parent, parent_to_children, is_pool, pool_id)
         for m in metas.values()
@@ -457,7 +473,13 @@ def list_clusters():
     cluster_list_key = f"{collection}:cluster:list:{algo}"
     meta_prefix = f"{collection}:cluster:{algo}:"
 
-    cids_raw = r.smembers(cluster_list_key)
+    # An exact uuid (the detail view's member fetch) needs one meta, not all of them.
+    exact_cid = (
+        resolve_cluster_id_by_uuid(r, collection, algo, cluster_uuid_q)
+        if cluster_uuid_q
+        else None
+    )
+    cids_raw = [exact_cid] if exact_cid else r.smembers(cluster_list_key)
     all_meta_keys = []
 
     if cids_raw:
@@ -780,12 +802,12 @@ def list_clusters():
 
     # 4. Fetch direct members for ONLY the clusters in the current page
     if show_members and page:
-        p_pipe = r.pipeline(transaction=False)
         page_cids = [str(c["cluster_id"]) for c in page]
         db_collection = f"global:pool:{pool_id}" if is_pool else collection
-        for cid in page_cids:
-            p_pipe.smembers(f"{db_collection}:cluster:{algo}:{cid}:direct_members")
-        direct_members_ids_list = p_pipe.execute()
+        direct_members_ids_list = [
+            _structural_direct_members(r, db_collection, algo, cid, parent_to_children)
+            for cid in page_cids
+        ]
 
         all_member_ids = set()
         cluster_to_member_ids = {}
