@@ -2815,7 +2815,8 @@ function binSimCovBar(coverage, analyzedBytes, unanalyzedBytes) {
 }
 
 /** Main score card (current sort key) + small side cards for every other
- *  score type the item actually has data for, high -> low, click-to-promote.
+ *  score type the item actually has data for, high -> low. Clicks bubble to
+ *  the row's Open Diff handler.
  *  A type with a null/undefined field on this item gets no card -- a
  *  container-only Content score never shows a dead 0% on a file pair. */
 function binSimScoreCards(item, activeScoreType) {
@@ -2829,16 +2830,11 @@ function binSimScoreCards(item, activeScoreType) {
         .filter(k => k !== active && item[types[k].field] != null)
         .sort((a, b) => (item[types[b].field] || 0) - (item[types[a].field] || 0));
 
-    const promote = (type) =>
-        `event.stopPropagation(); if (document.getElementById('nbr-score-type')) { FileView.setNeighborScoreType(${jsString(type)}); } `
-        + `else { const sel = document.getElementById('bsim-score-type'); if (sel) { sel.value = ${jsString(type)}; applyBinSimSearch(); } }`;
-
     const small = others.map(k => {
         const meta = types[k];
         const val = ((item[meta.field] || 0) * 100).toFixed(0) + '%';
-        return `<div class="bsim-score-card" title="${escapeAttr(meta.label + ': click to make this the main score')}"
-            onclick="${escapeAttr(promote(k))}"
-            style="display:flex; align-items:center; gap:4px; font-size:0.7rem; color:${meta.color}; cursor:pointer; opacity:0.85; font-weight:600;">
+        return `<div class="bsim-score-card" title="${escapeAttr(meta.label)}"
+            style="display:flex; align-items:center; gap:4px; font-size:0.7rem; color:${meta.color}; opacity:0.85; font-weight:600;">
             <i class="${meta.icon}"></i> <span>${meta.label}</span> <span>${val}</span>
         </div>`;
     }).join('');
