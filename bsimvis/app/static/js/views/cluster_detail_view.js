@@ -468,13 +468,15 @@ window.ClusterDetailView = {
             return rowHtml;
         };
 
-        // Ancestor path, furthest-first, down to the selected cluster, then
-        // its loaded descendants -- the bounded window fetchSlice() loaded.
-        const path = [...this.treeAncestors].reverse();
-        path.forEach((cid, i) => { html += buildHtml(cid, i); });
-        const centerDepth = path.length;
+        // buildHtml already recurses through every loaded/expanded child, so
+        // one call on the topmost visible node draws the whole path down
+        // through the selected cluster to its descendants -- calling it again
+        // per ancestor (or once more for the center) would draw each level's
+        // subtree twice.
+        const path = [...this.treeAncestors].reverse(); // furthest-first
         const centerId = this.clusterMapByUuid[this.selectedClusterUuid]?.cluster_id;
-        if (centerId !== undefined) html += buildHtml(String(centerId), centerDepth);
+        const topId = path.length ? path[0] : (centerId !== undefined ? String(centerId) : null);
+        if (topId !== null) html += buildHtml(topId, 0);
 
         treeContainer.innerHTML = html;
     },
