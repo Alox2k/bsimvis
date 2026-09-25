@@ -604,11 +604,14 @@ window.FileView = {
             const inferredTagCategory = (axis, values) => {
                 const nodes = new Map();
                 Object.entries(values || {}).forEach(([value, item]) => {
-                    const parts = String(value).split(':');
+                    // `A:B#C` nests under `A:B`: the `#` tail is the deepest level.
+                    const body = String(value).split('#')[0];
+                    const parts = body.split(':').map((_, i, all) => all.slice(0, i + 1).join(':'));
+                    if (body !== String(value)) parts.push(String(value));
                     const start = parts[0].toLowerCase() === axis.toLowerCase() ? 1 : 0;
                     let parent = null;
                     for (let i = start; i < parts.length; i++) {
-                        const nodeValue = parts.slice(0, i + 1).join(':');
+                        const nodeValue = parts[i];
                         const node = nodes.get(nodeValue) || { value: nodeValue, item, children: [], parent };
                         node.item = i === parts.length - 1 ? item : (node.item || item);
                         node.parent = parent;
