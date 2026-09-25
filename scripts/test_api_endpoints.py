@@ -697,6 +697,84 @@ def test_cluster_tags():
         pool_service.delete_pool(pool_id)
 
 
+def test_function_search_unindexed_cluster():
+    """?cluster_uuid= / ?cluster_id= find a cluster with no idx:func bucket.
+
+    hierarchical_uf indexes a function only under its cohesion-cut primary
+    cluster, so a low-cohesion ancestor has :meta + :members but no bucket.
+    Search must fall back to its :members set instead of returning 0.
+    """
+    from bsimvis.app.services.collection_config import resolve_collection_algo
+    from bsimvis.app.services.redis_client import get_redis
+
+    print(_color(f"\n{'='*60}", CYAN))
+    print(_color(" Function search on unindexed cluster", BOLD))
+    print(_color(f"{'='*60}", CYAN))
+
+    r = get_redis()
+    collection = f"unindexed_cluster_{uuid.uuid4().hex[:8]}"
+    algo = resolve_collection_algo(collection, None)
+    fids = [f"{collection}:func:md5{i}:0x{i}" for i in range(2)]
+    c_uuid = "lowcoh" + uuid.uuid4().hex[:6]
+    keys = [f"{fid}:meta" for fid in fids] + [
+        f"{collection}:cluster:{algo}:7:meta",
+        f"{collection}:cluster:{algo}:7:members",
+        f"{collection}:cluster:tree_links:{algo}",
+    ]
+    try:
+        for i, fid in enumerate(fids):
+            r.set(
+                f"{fid}:meta",
+                json.dumps(
+                    {
+                        "function_id": fid,
+                        "function_name": f"f{i}",
+                        "file_md5": f"md5{i}",
+                    }
+                ),
+            )
+        r.set(
+            f"{collection}:cluster:{algo}:7:meta",
+            json.dumps(
+                {"cluster_id": 7, "cluster_uuid": c_uuid, "cohesion_score": 0.2}
+            ),
+        )
+        r.sadd(f"{collection}:cluster:{algo}:7:members", *fids)
+        r.set(
+            f"{collection}:cluster:tree_links:{algo}",
+            json.dumps([{"parent": 9, "child": 7, "lambda": 1.0, "size": 2}]),
+        )
+        for field, val in (("cluster_uuid", c_uuid), ("cluster_id", "7")):
+            body = test_endpoint(
+                "GET",
+                "/api/function/search",
+                params={"collection": collection, field: val},
+                label=f"GET /api/function/search ({field} unindexed)",
+            )
+            found = sorted(
+                f.get("id") or f.get("function_id")
+                for f in (body or {}).get("functions", [])
+            )
+            check(
+                f"function search ?{field}= finds unindexed cluster members",
+                (body or {}).get("total") == 2 and found == fids,
+                f"total={(body or {}).get('total')} found={found}",
+            )
+        body = test_endpoint(
+            "GET",
+            "/api/function/search",
+            params={"collection": collection, "cluster_uuid": "no-such-uuid"},
+            label="GET /api/function/search (unknown cluster_uuid)",
+        )
+        check(
+            "unknown cluster_uuid still returns 0",
+            (body or {}).get("total") == 0,
+            str(body)[:200],
+        )
+    finally:
+        r.delete(*keys)
+
+
 def test_cluster_response_contract():
     """Guards the response shape the unified search and homepage read.
 
@@ -7436,6 +7514,7 @@ if __name__ == "__main__":
         test_pool_hierarchical_axis_fanout,
         test_cluster_tags,
         test_incremental_hierarchical_cluster_equivalence,
+        test_function_search_unindexed_cluster,
         test_cluster_response_contract,
         test_pool_annotation_propagation,
         test_search_filters_and_sorting,

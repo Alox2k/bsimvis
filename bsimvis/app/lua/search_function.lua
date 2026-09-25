@@ -52,7 +52,11 @@ for idx, g in ipairs(groups) do
                         for _, m in ipairs(members) do allowed[m] = true end
                     end
                 end
-            elseif sub.level == "func" then 
+            elseif sub.keys then
+                -- Raw member sets (cluster :members fallback when no idx bucket)
+                local members = redis.call('SUNION', unpack(sub.keys)) or {}
+                for _, m in ipairs(members) do allowed[m] = true end
+            elseif sub.level == "func" then
                 local prefix = collection .. ":idx:func:" .. sub.field .. ":"
                 if sub.targets then
                     local targets = sub.targets

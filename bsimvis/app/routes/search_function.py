@@ -49,6 +49,41 @@ def _id_sorted_page(r, key, offset, limit):
     return doc_ids[offset : offset + limit]
 
 
+def _cluster_members_key(r, col, algo, field, val):
+    """`:members` key of a cluster that has no idx:func bucket.
+
+    hierarchical_uf only indexes each function under its cohesion-cut
+    primary cluster, so lower-cohesion ancestors have a :meta and a full
+    :members set but no cluster_uuid/cluster_id bucket.
+
+    ponytail: one GET per tree node on a uuid miss; add a uuid -> cid hash
+    at persist time if trees get big enough for this to show up.
+    """
+    base = f"{col}:cluster:{algo}"
+    if field == "cluster_id":
+        key = f"{base}:{val}:members"
+        return key if r.exists(key) else None
+
+    cids = {
+        c.decode() if isinstance(c, bytes) else c
+        for c in r.smembers(f"{col}:cluster:list:{algo}")
+    }
+    try:
+        for link in json.loads(r.get(f"{col}:cluster:tree_links:{algo}") or "[]"):
+            cids.update((str(link["parent"]), str(link["child"])))
+    except (ValueError, KeyError, TypeError):
+        pass
+    cids = sorted(cids)
+    pipe = r.pipeline(transaction=False)
+    for cid in cids:
+        pipe.get(f"{base}:{cid}:meta")
+    val = val.lower()
+    for cid, raw in zip(cids, pipe.execute()):
+        if raw and str(json.loads(raw).get("cluster_uuid", "")).lower() == val:
+            return f"{base}:{cid}:members"
+    return None
+
+
 def search_functions():
     try:
         t_req_start = time.perf_counter()
@@ -433,6 +468,28 @@ def search_functions():
                                 )
                             all_matches.extend(matches)
                             break  # stop at first level that returns results
+
+                if not all_matches and label in ("cluster_uuid", "cluster_id"):
+                    members_key = _cluster_members_key(
+                        r,
+                        col,
+                        resolve_collection_algo(col, request.args.get("algo")),
+                        label,
+                        val,
+                    )
+                    if members_key:
+                        groups_raw.append(
+                            {
+                                "type": "metadata",
+                                "field": f"{label}:{val}",
+                                "sub_groups": [
+                                    {"level": "func", "keys": [members_key]}
+                                ],
+                                "weight": r.scard(members_key),
+                                "exclude": False,
+                            }
+                        )
+                        continue
 
                 if not all_matches:
                     logging.info(
