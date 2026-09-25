@@ -649,8 +649,11 @@ def get_tree_links(r, collection, algo, tree_links_prefix="cluster"):
 def resolve_cluster_id_by_uuid(r, collection, algo, uuid, meta_prefix="cluster"):
     """cluster_id for a uuid via the small uf:uuid hash, not a full meta scan.
 
-    Falls back to None (caller decides whether to fall back further) when the
-    hash is missing -- older builds, or an algo that never wrote one.
+    ponytail: the hierarchical_snn/HDBSCAN engine never writes that hash (its
+    labels come from a fresh uuid.uuid4() per build, kept only in the meta
+    blob) -- fall back to one full meta scan in that case. Still only paid
+    once per re-center, never on every child expand/"+more" page, which is
+    what made the old sidebar slow.
     """
     uuid = str(uuid or "").lower()
     if not uuid:
@@ -661,6 +664,35 @@ def resolve_cluster_id_by_uuid(r, collection, algo, uuid, meta_prefix="cluster")
         cid = cid.decode() if isinstance(cid, bytes) else cid
         u = u.decode() if isinstance(u, bytes) else u
         if str(u).lower() == uuid:
+            return cid
+    if pairs:
+        return None  # hash exists and was checked; a real miss, not "unwritten"
+
+    list_key = f"{collection}:{meta_prefix}:list:{algo}"
+    meta_key_prefix = f"{collection}:{meta_prefix}:{algo}:"
+    cids_raw = r.smembers(list_key) or set()
+    if not cids_raw:
+        # The hierarchical/HDBSCAN engine never populates the `list` set
+        # (only the union-find engine does) -- same bounded SCAN the plain
+        # listing route falls back to, never a blocking KEYS.
+        pattern = f"{meta_key_prefix}*:meta"
+        cursor = 0
+        while True:
+            cursor, keys = r.scan(cursor=cursor, match=pattern, count=1000)
+            for k in keys:
+                k = k.decode() if isinstance(k, bytes) else k
+                cids_raw.add(k[len(meta_key_prefix) : -len(":meta")])
+            if cursor == 0:
+                break
+    for cid in cids_raw:
+        cid = cid.decode() if isinstance(cid, bytes) else cid
+        blob = r.get(f"{meta_key_prefix}{cid}:meta")
+        if not blob:
+            continue
+        m = json.loads(blob) if not isinstance(blob, dict) else blob
+        if isinstance(m, str):
+            m = json.loads(m)
+        if str(m.get("cluster_uuid", "")).lower() == uuid:
             return cid
     return None
 
