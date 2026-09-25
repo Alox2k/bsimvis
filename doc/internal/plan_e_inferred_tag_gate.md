@@ -266,3 +266,28 @@ filter on top of a sane write, not the only one.
 - Manual run on a real collection per engine: re-cluster twice with different
   thresholds and confirm a file that changed cluster, or fell to noise, holds no
   labels from its old cluster.
+
+## Follow-up: retire the `inferred:` string prefix
+
+Decision 7 registered `NAMESPACE_POLICY["inferred"]` so a hand-typed
+`inferred:av:x` would be dropped at every `filter_tags` boundary. On review this
+defends against a string shape that only exists because the prefix itself
+exists -- remove the prefix and there is nothing of that shape left to type.
+
+The real protection was never the prefix: `_member_tag_values`
+(`cluster_utils.py`) reads only `meta["tags"]`/`meta["user_tags"]`, never
+`meta["inferred_tags"]`, so a stored consensus guess can never re-enter as
+evidence for another cluster's vote regardless of what string it's spelled
+with. And every analysis namespace a gate could promote (`av:`, `yara:`, ...)
+already excludes `user` from its own `writers` tuple, so a human typing the
+bare tag directly (`av:x`, no wrapper) is rejected the same as before --
+that check predates and is independent of Decision 7.
+
+Net: `inferred_tag_values` (`cluster_utils.py`) now returns the plain tag id
+(`av:clamav:mirai`, not `inferred:av:clamav:mirai`). `NAMESPACE_POLICY["inferred"]`
+is deleted -- dead once no tag carries that namespace. `search_file.py`'s
+`_TAG_FILTER_ALIASES` globs drop the `inferred:` literal (`"av:"` instead of
+`"inferred:av:"`); the `inferred_tags` *field* stays the real separator, unchanged.
+Existing stored values keep their old prefixed spelling until the next
+cluster (re)build overwrites them (`_store_inferred_tags` replaces, never
+unions) -- no migration script, no direct DB edit.

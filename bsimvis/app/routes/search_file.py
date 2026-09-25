@@ -456,9 +456,9 @@ _TAG_FILTER_ALIASES = {
     "avtype": ("tags", "av:"),
     "yara": ("tags", "yara:"),
     "cc_ip": ("tags", "ip:"),
-    "inferred_avtype": ("inferred_tags", "inferred:av:"),
-    "inferred_yara": ("inferred_tags", "inferred:yara:"),
-    "inferred_ccip": ("inferred_tags", "inferred:ip:"),
+    "inferred_avtype": ("inferred_tags", "av:"),
+    "inferred_yara": ("inferred_tags", "yara:"),
+    "inferred_ccip": ("inferred_tags", "ip:"),
 }
 
 

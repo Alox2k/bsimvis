@@ -366,7 +366,7 @@ def inferred_tag_values(summary, cohesion, min_cohesion, min_coverage):
             best = candidate
             children = best.get("children") or []
         if best.get("tag_id"):
-            out.append(f"inferred:{best['tag_id']}")
+            out.append(best["tag_id"])
     return out
 
 
@@ -660,12 +660,12 @@ def demo():
     # Deepest passing node chosen: root at 100%, its child at 60% (>= floor).
     metas = [{"tags": ["av:clamav:mirai"]}] * 6 + [{"tags": ["av:clamav"]}] * 4
     summary = cluster_summary(metas, member_count=10)
-    assert inferred_tag_values(summary, 0.9, 0.5, 0.5) == ["inferred:av:clamav:mirai"]
+    assert inferred_tag_values(summary, 0.9, 0.5, 0.5) == ["av:clamav:mirai"]
 
     # Same shape, but the child falls under the floor -- root wins instead.
     metas = [{"tags": ["av:clamav:mirai"]}] * 3 + [{"tags": ["av:clamav"]}] * 7
     summary = cluster_summary(metas, member_count=10)
-    assert inferred_tag_values(summary, 0.9, 0.5, 0.5) == ["inferred:av:clamav"]
+    assert inferred_tag_values(summary, 0.9, 0.5, 0.5) == ["av:clamav"]
 
     # One member per prefix counted once: a single member with two leaf tags
     # sharing an ancestor ("av:clamav") contributes 1 to that ancestor, not 2.
@@ -682,11 +682,11 @@ def demo():
     resolved = resolve_hierarchical_inferred_tags(
         leaf_to_clusters={0: [20, 10], 1: [10]},
         idx_to_id={0: "fileA", 1: "fileB"},
-        gated_by_label={20: [], 10: ["inferred:av:clamav"]},
+        gated_by_label={20: [], 10: ["av:clamav"]},
     )
     assert resolved == {
-        "fileA": ["inferred:av:clamav"],
-        "fileB": ["inferred:av:clamav"],
+        "fileA": ["av:clamav"],
+        "fileB": ["av:clamav"],
     }, resolved
 
     print("cluster_utils demo OK")
