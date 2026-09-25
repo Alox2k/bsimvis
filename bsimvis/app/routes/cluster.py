@@ -6,7 +6,12 @@ from bsimvis.app.services.job_service import JobService, JobType
 from bsimvis.app.services.redis_client import get_redis
 from bsimvis.app.services.config_service import config_service
 from bsimvis.app.services.collection_config import resolve_collection_algo
-from bsimvis.app.services.cluster_utils import normalize_tag_distribution
+from bsimvis.app.services.cluster_utils import (
+    normalize_tag_distribution,
+    cluster_tree_slice,
+    cluster_children_page,
+    get_tree_links,
+)
 from bsimvis.app.services.index_service import get_pool_id
 from bsimvis.app.services.query_syntax import parse_filter_value
 
@@ -277,6 +282,107 @@ def _get_matching_ids(r, collection, level, field, val):
     return matching_ids
 
 
+def _shape_cluster_result(m, child_to_parent, parent_to_children, is_pool, pool_id):
+    """meta blob -> the dict shape the UI expects (parent, has_children, distributions)."""
+    raw_samples = m.get("sample_members") or m.get("sample_functions") or []
+    sample_members = []
+    for s in raw_samples:
+        if is_pool:
+            fid = s.get("function_id") or s.get("id") or ""
+            parts = fid.split(":")
+            original_col = parts[0] if parts else pool_id
+            sample_members.append(
+                {
+                    "bsim_features_count": s.get("bsim_features_count", 0),
+                    "collection": original_col,
+                    "entrypoint_address": s.get("entrypoint_address"),
+                    "file_md5": s.get("file_md5"),
+                    "function_id": fid,
+                    "function_name": s.get("function_name", "Unknown"),
+                }
+            )
+        else:
+            sample_members.append(s)
+
+    cid = str(m.get("cluster_id"))
+    return {
+        "cluster_id": m.get("cluster_id"),
+        "cluster_uuid": m.get("cluster_uuid"),
+        "cluster_name": m.get("cluster_name"),
+        "tag_id": m.get("tag_id", m.get("cluster_id")),
+        "user_tags": m.get("user_tags", []),
+        "avg_stability": m.get("avg_stability", 0.0),
+        "avg_features": m.get("avg_features", 0),
+        "cohesion_score": m.get("cohesion_score", 0),
+        "count": m.get("member_count"),
+        "created_at": m.get("created_at"),
+        "parent": child_to_parent.get(cid),
+        "sample_members": sample_members,
+        "direct_members": m.get("direct_members", []),
+        "tag_distribution": normalize_tag_distribution(
+            m.get("tag_distribution", {}),
+            m.get("member_count") or 0,
+            m.get("cohesion_score"),
+        ),
+        "architecture_distribution": m.get("architecture_distribution", []),
+        "executable_format_distribution": m.get("executable_format_distribution", []),
+        "batch_uuid_distribution": m.get("batch_uuid_distribution", []),
+        "has_children": bool(parent_to_children.get(cid)),
+        "child_total": len(parent_to_children.get(cid, [])),
+    }
+
+
+def _list_clusters_slice(collection, algo, is_pool, pool_id, r):
+    """The `slice` fast path: a bounded window around one cluster, or one
+    node's next page of children -- never a full-collection meta scan.
+
+    See cluster_utils.cluster_tree_slice / cluster_children_page.
+    """
+    parent_q = request.args.get("parent", "").strip()
+    if parent_q:
+        width = request.args.get("width", 10, type=int)
+        offset = request.args.get("offset", 0, type=int)
+        metas, total_children = cluster_children_page(
+            r, collection, algo, parent_q, offset=offset, width=width
+        )
+        _, parent_to_children = get_tree_links(r, collection, algo)
+        child_to_parent = {cid: parent_q for cid in metas}
+        results = [
+            _shape_cluster_result(
+                m, child_to_parent, parent_to_children, is_pool, pool_id
+            )
+            for m in metas.values()
+        ]
+        results.sort(key=lambda x: x.get("count") or 0, reverse=True)
+        return {
+            "collection": collection,
+            "algo": algo,
+            "total": total_children,
+            "results": results,
+        }
+
+    slice_uuid = request.args.get("slice", "").strip()
+    up = request.args.get("up", 3, type=int)
+    down = request.args.get("down", 3, type=int)
+    width = request.args.get("width", 10, type=int)
+    metas, center, hidden_above = cluster_tree_slice(
+        r, collection, algo, slice_uuid, up=up, down=down, width=width
+    )
+    child_to_parent, parent_to_children = get_tree_links(r, collection, algo)
+    results = [
+        _shape_cluster_result(m, child_to_parent, parent_to_children, is_pool, pool_id)
+        for m in metas.values()
+    ]
+    return {
+        "collection": collection,
+        "algo": algo,
+        "total": len(results),
+        "center_cluster_id": center,
+        "hidden_above": hidden_above,
+        "results": results,
+    }
+
+
 def list_clusters():
     """Lists discovered clusters with metadata, filtering, and sorting."""
     t_start = time.perf_counter()
@@ -344,6 +450,9 @@ def list_clusters():
             return {"error": "Pool not found"}, 404
         algo = pool_service.similarity_algo(pool)
         collection = f"global:pool:{pool_id}"
+
+    if request.args.get("slice") or request.args.get("parent"):
+        return _list_clusters_slice(collection, algo, is_pool, pool_id, r)
 
     cluster_list_key = f"{collection}:cluster:list:{algo}"
     meta_prefix = f"{collection}:cluster:{algo}:"

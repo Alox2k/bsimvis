@@ -625,6 +625,147 @@ def _walk(distribution):
             stack.extend(node["children"])
 
 
+def get_tree_links(r, collection, algo, tree_links_prefix="cluster"):
+    """child_to_parent / parent_to_children maps from the stored tree_links blob.
+
+    One GET regardless of collection size -- callers used to rebuild this by
+    reading every cluster's meta key just to find its parent.
+    """
+    links_key = f"{collection}:{tree_links_prefix}:tree_links:{algo}"
+    links_raw = r.get(links_key)
+    child_to_parent, parent_to_children = {}, {}
+    if links_raw:
+        try:
+            links = json.loads(links_raw)
+            for l in links:
+                c, p = str(l["child"]), str(l["parent"])
+                child_to_parent[c] = p
+                parent_to_children.setdefault(p, []).append(c)
+        except Exception:
+            pass
+    return child_to_parent, parent_to_children
+
+
+def resolve_cluster_id_by_uuid(r, collection, algo, uuid, meta_prefix="cluster"):
+    """cluster_id for a uuid via the small uf:uuid hash, not a full meta scan.
+
+    Falls back to None (caller decides whether to fall back further) when the
+    hash is missing -- older builds, or an algo that never wrote one.
+    """
+    uuid = str(uuid or "").lower()
+    if not uuid:
+        return None
+    uuid_key = f"{collection}:{meta_prefix}:{algo}:uf:uuid"
+    pairs = r.hgetall(uuid_key) or {}
+    for cid, u in pairs.items():
+        cid = cid.decode() if isinstance(cid, bytes) else cid
+        u = u.decode() if isinstance(u, bytes) else u
+        if str(u).lower() == uuid:
+            return cid
+    return None
+
+
+def get_cluster_metas(r, collection, algo, cids, meta_prefix="cluster"):
+    """Pipelined GET + parse of only the given cluster ids' meta blobs."""
+    cids = [str(c) for c in cids]
+    if not cids:
+        return {}
+    pipe = r.pipeline(transaction=False)
+    for cid in cids:
+        pipe.get(f"{collection}:{meta_prefix}:{algo}:{cid}:meta")
+    raw = pipe.execute()
+    out = {}
+    for cid, blob in zip(cids, raw):
+        if not blob:
+            continue
+        m = json.loads(blob) if not isinstance(blob, dict) else blob
+        if isinstance(m, str):
+            m = json.loads(m)
+        out[cid] = m
+    return out
+
+
+def cluster_tree_slice(
+    r,
+    collection,
+    algo,
+    uuid,
+    up=3,
+    down=3,
+    width=10,
+    meta_prefix="cluster",
+    tree_links_prefix=None,
+):
+    """A bounded window of the cluster tree around `uuid`, cheap at any collection size.
+
+    Never reads more metas than the window actually needs: `up` ancestors on
+    the path, plus each visited node's top-`width` children by member_count.
+    Returns (nodes: {cid: meta}, center_cid, hidden_above: int) so the caller
+    can render "N more above" without walking further.
+    """
+    tree_links_prefix = tree_links_prefix or meta_prefix
+    child_to_parent, parent_to_children = get_tree_links(
+        r, collection, algo, tree_links_prefix
+    )
+    center = resolve_cluster_id_by_uuid(r, collection, algo, uuid, meta_prefix)
+    if center is None:
+        return {}, None, 0
+
+    # Ancestor chain, capped at `up` hops; count how many more exist above.
+    ancestors = []
+    curr = center
+    while curr in child_to_parent:
+        curr = child_to_parent[curr]
+        ancestors.append(curr)
+    shown_ancestors = ancestors[:up]
+    hidden_above = max(0, len(ancestors) - up)
+
+    needed = set(shown_ancestors)
+    needed.add(center)
+
+    # Down: BFS by level, top-`width` children per node by member_count.
+    frontier = [center]
+    for _ in range(down):
+        next_frontier = []
+        for node in frontier:
+            child_ids = parent_to_children.get(node, [])
+            if not child_ids:
+                continue
+            child_metas = get_cluster_metas(r, collection, algo, child_ids, meta_prefix)
+            ranked = sorted(
+                child_ids,
+                key=lambda c: child_metas.get(c, {}).get("member_count", 0),
+                reverse=True,
+            )
+            shown = ranked[:width]
+            needed.update(shown)
+            next_frontier.extend(shown)
+        frontier = next_frontier
+
+    metas = get_cluster_metas(r, collection, algo, needed, meta_prefix)
+    return metas, center, hidden_above
+
+
+def cluster_children_page(
+    r, collection, algo, parent_cid, offset=0, width=10, meta_prefix="cluster"
+):
+    """One page of a single node's children, sorted by member_count desc.
+
+    Used for the tree's "+N more" row and for climbing further above the
+    ancestor window ("N more above" -> re-run with a bigger `up`, or for a
+    single extra parent hop this covers it). Bounded by that node's own
+    fan-out, never the whole collection.
+    """
+    _, parent_to_children = get_tree_links(r, collection, algo, meta_prefix)
+    child_ids = parent_to_children.get(str(parent_cid), [])
+    metas = get_cluster_metas(r, collection, algo, child_ids, meta_prefix)
+    ranked = sorted(
+        child_ids, key=lambda c: metas.get(c, {}).get("member_count", 0), reverse=True
+    )
+    page = ranked[offset : offset + width]
+    return {c: metas[c] for c in page if c in metas}, len(child_ids)
+
+
 def demo():
     """The collision this resolver exists for: one label, two namespaces."""
 

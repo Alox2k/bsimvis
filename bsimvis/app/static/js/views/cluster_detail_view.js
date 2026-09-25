@@ -3,13 +3,15 @@
  * Loaded when navigating to /collections/{col}/functions/clusters/{uuid}
  *                       or /collections/{col}/files/clusters/{uuid}
  *
- * The tree is loaded one level at a time. This view used to open with
- * `list?limit=20000`, which on a function-clustered collection is every
- * cluster in the collection -- megabytes of summaries to draw a sidebar that
- * shows a dozen rows. Now it asks for the cluster itself (with its ancestor
- * chain, so the path to the root can be drawn) and for one node's direct
- * children at a time, via the `parent` filter.
+ * The sidebar shows a bounded WINDOW around the selected cluster, not the
+ * whole hierarchy: `treeUp` ancestors above, `treeDown` levels below, at most
+ * `treeWidth` children per node -- fetched in one `slice` call server-side
+ * (cluster_utils.cluster_tree_slice), which never reads more cluster metas
+ * than the window needs. "N more above" / "+N more" rows page past the caps
+ * via the `parent` fast path. Selecting another node re-centers the window.
  */
+
+const CLUSTER_TREE_DEFAULTS = { up: 3, down: 3, width: 10 };
 
 window.ClusterDetailView = {
     params: null,
@@ -21,9 +23,15 @@ window.ClusterDetailView = {
 
     clusterMapById: {},
     clusterMapByUuid: {},
-    childrenMap: {}, // parent_id -> [child_id1, child_id2, ...]
-    childrenLoaded: new Set(), // cluster_id whose children have been fetched
-    rootNodes: [],
+    childrenMap: {}, // parent_id -> [child_id1, child_id2, ...] (shown so far)
+    childTotal: {}, // parent_id -> total child count (for "+N more")
+    childrenLoaded: new Set(), // cluster_id whose children have been fetched at least once
+    treeAncestors: [], // nearest-first cluster_ids above the selected node, currently shown
+    hiddenAbove: 0, // ancestors that exist but aren't in treeAncestors yet
+
+    treeUp: CLUSTER_TREE_DEFAULTS.up,
+    treeDown: CLUSTER_TREE_DEFAULTS.down,
+    treeWidth: CLUSTER_TREE_DEFAULTS.width,
 
     selectedClusterUuid: null,
     expandedGroups: new Set(),
@@ -37,12 +45,38 @@ window.ClusterDetailView = {
         this.clusterMapById = {};
         this.clusterMapByUuid = {};
         this.childrenMap = {};
+        this.childTotal = {};
         this.childrenLoaded.clear();
-        this.rootNodes = [];
+        this.treeAncestors = [];
+        this.hiddenAbove = 0;
         this.memberCache = {};
         this.expandedGroups.clear();
         this.treeExpanded.clear();
+        this._sliceCenteredOn = null;
         this.tab = 'members';
+    },
+
+    /** up/down/width, remembered per browser -- a per-viewer convenience, never load-bearing. */
+    loadTreeSettings() {
+        try {
+            const raw = localStorage.getItem('clusterTreeSettings');
+            const saved = raw ? JSON.parse(raw) : {};
+            this.treeUp = Number(saved.up) || CLUSTER_TREE_DEFAULTS.up;
+            this.treeDown = Number(saved.down) || CLUSTER_TREE_DEFAULTS.down;
+            this.treeWidth = Number(saved.width) || CLUSTER_TREE_DEFAULTS.width;
+        } catch (e) {
+            this.treeUp = CLUSTER_TREE_DEFAULTS.up;
+            this.treeDown = CLUSTER_TREE_DEFAULTS.down;
+            this.treeWidth = CLUSTER_TREE_DEFAULTS.width;
+        }
+    },
+
+    saveTreeSettings() {
+        try {
+            localStorage.setItem('clusterTreeSettings', JSON.stringify({
+                up: this.treeUp, down: this.treeDown, width: this.treeWidth,
+            }));
+        } catch (e) { /* private window or blocked storage: setting just won't persist */ }
     },
 
     api(path) {
@@ -66,36 +100,102 @@ window.ClusterDetailView = {
         return data.results || [];
     },
 
+    /** Same call, whole response (slice needs center_cluster_id / hidden_above too). */
+    async fetchClustersRaw(extra) {
+        const qs = new URLSearchParams();
+        if (this.params && this.params.pool) qs.set('pool', this.params.pool);
+        if (this.collection) qs.set('collection', this.collection);
+        if (this.isBinary) {
+            qs.set('axis', this.axis);
+            if (this.nodeType) qs.set('node_type', this.nodeType);
+        }
+        Object.entries(extra || {}).forEach(([k, v]) => qs.set(k, v));
+        const res = await fetch(`${this.api('list')}?${qs.toString()}`);
+        if (!res.ok) throw new Error(`Cluster lookup failed (${res.status})`);
+        return res.json();
+    },
+
+    /** Re-center the tree window on `uuid`: `treeUp` ancestors, `treeDown` levels
+     * below, `treeWidth` children per node -- one cheap server call
+     * (cluster_utils.cluster_tree_slice), not a full-collection scan. */
+    async fetchSlice(uuid) {
+        this.childrenMap = {};
+        this.childTotal = {};
+        this.childrenLoaded.clear();
+        this.treeExpanded.clear();
+        this.treeAncestors = [];
+        this.hiddenAbove = 0;
+
+        const data = await this.fetchClustersRaw({
+            slice: uuid, up: String(this.treeUp), down: String(this.treeDown), width: String(this.treeWidth),
+        });
+        this.ingest(data.results || []);
+        this.hiddenAbove = data.hidden_above || 0;
+
+        const centerId = data.center_cluster_id ? String(data.center_cluster_id) : null;
+        if (!centerId) return null;
+
+        // Walk the now-loaded ancestor chain nearest-first, and mark every
+        // loaded node (path + auto-fetched descendants) expanded by default.
+        let curr = this.clusterMapById[centerId];
+        while (curr && curr.parent && this.clusterMapById[String(curr.parent)]) {
+            this.treeAncestors.push(String(curr.parent));
+            this.treeExpanded.add(String(curr.parent));
+            curr = this.clusterMapById[String(curr.parent)];
+        }
+        this.treeExpanded.add(centerId);
+        Object.keys(this.childrenMap).forEach(pid => {
+            this.childrenLoaded.add(pid);
+            this.treeExpanded.add(pid);
+        });
+        this._sliceCenteredOn = uuid;
+        return centerId;
+    },
+
     /** Merge fetched clusters into the local maps, newest fields winning. */
     ingest(list) {
         (list || []).forEach(c => {
             const cid = String(c.cluster_id);
             this.clusterMapById[cid] = { ...(this.clusterMapById[cid] || {}), ...c };
             if (c.cluster_uuid) this.clusterMapByUuid[c.cluster_uuid] = this.clusterMapById[cid];
+            if (c.child_total !== undefined) this.childTotal[cid] = c.child_total;
 
             const pid = c.parent ? String(c.parent) : null;
             if (pid) {
                 if (!this.childrenMap[pid]) this.childrenMap[pid] = [];
                 if (!this.childrenMap[pid].includes(cid)) this.childrenMap[pid].push(cid);
-            } else if (!this.rootNodes.includes(cid)) {
-                this.rootNodes.push(cid);
             }
         });
     },
 
-    /** Direct children of one cluster, fetched once. */
-    async loadChildren(clusterId) {
+    /** How many of a node's children are loaded/shown vs. its real total. */
+    hiddenChildCount(cid) {
+        const shown = (this.childrenMap[cid] || []).length;
+        const total = this.childTotal[cid] || 0;
+        return Math.max(0, total - shown);
+    },
+
+    /** Next page of one node's children (top-`treeWidth`, offset = shown so far). */
+    async loadMoreChildren(clusterId) {
         const cid = String(clusterId);
-        if (this.childrenLoaded.has(cid)) return;
-        this.childrenLoaded.add(cid);
+        const offset = (this.childrenMap[cid] || []).length;
         try {
-            const kids = await this.fetchClusters({ parent: cid, limit: '2000' });
-            if (!this.childrenMap[cid]) this.childrenMap[cid] = [];
+            const kids = await this.fetchClusters({ parent: cid, width: String(this.treeWidth), offset: String(offset) });
+            this.childrenLoaded.add(cid);
             this.ingest(kids);
+            this.treeExpanded.add(cid);
         } catch (e) {
-            console.error('Failed to fetch children of', cid, e);
-            this.childrenLoaded.delete(cid);
+            console.error('Failed to fetch more children of', cid, e);
         }
+        this.renderTree();
+        this.renderTable();
+    },
+
+    /** Reveal one more batch of ancestors above the current window. */
+    async loadMoreAbove() {
+        this.treeUp += CLUSTER_TREE_DEFAULTS.up;
+        await this.fetchSlice(this.selectedClusterUuid);
+        this.renderTree();
     },
 
     async init(params, containerId) {
@@ -121,6 +221,7 @@ window.ClusterDetailView = {
             container.innerHTML = '<div style="padding:30px; color:#f87171;">Error: No cluster UUID provided.</div>';
             return;
         }
+        this.loadTreeSettings();
 
         container.innerHTML = `
             <style>
@@ -138,6 +239,14 @@ window.ClusterDetailView = {
                 .bsim-side-actions { display:flex; gap:8px; text-transform:none; letter-spacing:0; font-weight:normal; }
                 .bsim-side-actions span { cursor:pointer; color:var(--dim); }
                 .bsim-side-actions span:hover { color:var(--accent); }
+                .bsim-tree-settings {
+                    display:flex; gap:12px; padding:0 12px 8px; color:var(--dim); font-size:0.72rem;
+                }
+                .bsim-tree-settings span { display:flex; align-items:center; gap:4px; }
+                .bsim-tree-settings input {
+                    width:34px; padding:1px 3px; font-size:0.72rem; text-align:center;
+                    background:var(--bg-alt); color:var(--text); border:1px solid var(--border); border-radius:4px;
+                }
                 .bsim-tree { flex:0 0 auto; }
                 .bsim-node {
                     display:flex; align-items:center; gap:6px; padding:4px 12px; cursor:pointer;
@@ -173,6 +282,11 @@ window.ClusterDetailView = {
                         <span class="bsim-side-actions">
                             <span onclick="ClusterDetailView.collapseTreeAll()" title="Collapse back to this cluster">collapse</span>
                         </span>
+                    </div>
+                    <div class="bsim-tree-settings" title="Ancestors shown / levels below / children per node">
+                        <span><i class="fa-solid fa-angle-up"></i> <input type="number" min="1" max="50" value="${this.treeUp}" onchange="ClusterDetailView.updateTreeSetting('up', this.value)"></span>
+                        <span><i class="fa-solid fa-angle-down"></i> <input type="number" min="1" max="50" value="${this.treeDown}" onchange="ClusterDetailView.updateTreeSetting('down', this.value)"></span>
+                        <span><i class="fa-solid fa-arrows-left-right"></i> <input type="number" min="1" max="50" value="${this.treeWidth}" onchange="ClusterDetailView.updateTreeSetting('width', this.value)"></span>
                     </div>
                     <div id="cluster-tree" class="bsim-tree"></div>
                 </div>
@@ -219,34 +333,27 @@ window.ClusterDetailView = {
         `;
 
         try {
-            // The cluster itself plus its ancestors: enough to draw the path to
-            // the root. Everything else in the tree arrives on expand.
-            const lookup = { cluster_uuid: uuid, show_parents: 'true', limit: '1' };
-            let chain = await this.fetchClusters(lookup);
+            let centerId = await this.fetchSlice(uuid);
             // Each score axis clusters into its own namespace, but a uuid is
             // unique across them: a link that carries no axis probes the
             // others rather than reporting the cluster missing.
-            if (this.isBinary && !explicitAxis && !chain.length) {
+            if (this.isBinary && !explicitAxis && !centerId) {
                 for (const ax of ['overall', 'code', 'library', 'content']) {
                     if (ax === this.axis) continue;
                     this.axis = ax;
-                    chain = await this.fetchClusters(lookup);
-                    if (chain.length) break;
+                    centerId = await this.fetchSlice(uuid);
+                    if (centerId) break;
                 }
             }
-            this.ingest(chain);
 
-            // uuid matching is a substring test server-side; pin the exact one.
-            const self = chain.find(c => String(c.cluster_uuid) === String(uuid))
-                || chain.find(c => String(c.cluster_uuid || '').startsWith(String(uuid)));
-
+            const self = this.clusterMapById[centerId];
             if (!self) {
                 container.innerHTML = `<div style="padding:30px; color:var(--dim);">No cluster matching <code>${escapeHtml(uuid)}</code>.</div>`;
                 return;
             }
 
             this.selectedClusterUuid = self.cluster_uuid;
-            this.ensureTreeExpandedTo(self.cluster_id);
+            this._sliceCenteredOn = self.cluster_uuid;
 
             document.getElementById('cluster-loader').style.display = 'none';
             document.getElementById('cluster-main').style.display = 'flex';
@@ -262,23 +369,31 @@ window.ClusterDetailView = {
         }
     },
 
-    ensureTreeExpandedTo(clusterId) {
-        let curr = this.clusterMapById[String(clusterId)];
-        while (curr && curr.parent) {
-            this.treeExpanded.add(String(curr.parent));
-            curr = this.clusterMapById[String(curr.parent)];
-        }
+    collapseTreeAll() {
+        this.fetchSlice(this.selectedClusterUuid).then(() => this.renderTree());
     },
 
-    collapseTreeAll() {
-        this.treeExpanded.clear();
-        this.ensureTreeExpandedTo(this.clusterMapByUuid[this.selectedClusterUuid]?.cluster_id);
-        this.renderTree();
+    updateTreeSetting(key, value) {
+        const n = Math.max(1, Math.min(50, parseInt(value, 10) || CLUSTER_TREE_DEFAULTS[key]));
+        this[key === 'up' ? 'treeUp' : key === 'down' ? 'treeDown' : 'treeWidth'] = n;
+        this.saveTreeSettings();
+        this.fetchSlice(this.selectedClusterUuid).then(() => this.renderTree());
+    },
+
+    /** Ancestors + the selected node itself: always expanded, never collapse --
+     * their caret instead pages in more of their children (siblings of the path). */
+    isTreePathNode(id) {
+        const centerId = this.clusterMapByUuid[this.selectedClusterUuid]?.cluster_id;
+        return this.treeAncestors.includes(id) || id === String(centerId);
     },
 
     async toggleTreeNode(clusterId, event) {
         event.stopPropagation();
         const id = String(clusterId);
+        if (this.isTreePathNode(id)) {
+            await this.loadMoreChildren(id);
+            return;
+        }
         if (this.treeExpanded.has(id)) {
             this.treeExpanded.delete(id);
             this.renderTree();
@@ -287,16 +402,13 @@ window.ClusterDetailView = {
         this.treeExpanded.add(id);
         this.renderTree();
         if (!this.childrenLoaded.has(id)) {
-            await this.loadChildren(id);
-            this.renderTree();
+            await this.loadMoreChildren(id);
         }
     },
 
     /** Does this node have children, loaded or not? */
     hasChildren(c, cid) {
         if ((this.childrenMap[cid] || []).length > 0) return true;
-        // has_children comes off the listing, so a node that has never been
-        // expanded still draws a caret instead of looking like a leaf.
         return !this.childrenLoaded.has(cid) && !!(c && c.has_children);
     },
 
@@ -305,6 +417,11 @@ window.ClusterDetailView = {
         if (!treeContainer) return;
 
         let html = '';
+        if (this.hiddenAbove > 0) {
+            html += `<div class="bsim-node" style="color:var(--accent); font-size:0.72rem;" onclick="ClusterDetailView.loadMoreAbove()">
+                <i class="fa-solid fa-angles-up" style="width:12px;"></i> ${this.hiddenAbove} more above…</div>`;
+        }
+
         const buildHtml = (cid, depth) => {
             const c = this.clusterMapById[cid];
             if (!c) return '';
@@ -337,10 +454,13 @@ window.ClusterDetailView = {
                     rowHtml += `<div class="bsim-node" style="padding-left:${28 + depth * 16}px; color:var(--dim); cursor:default;">
                         <i class="fa-solid fa-spinner fa-spin" style="font-size:0.7rem;"></i> loading…</div>`;
                 } else {
-                    // Sort children by count desc
-                    const sorted = [...children].sort((a, b) => (this.clusterMapById[b]?.count || 0) - (this.clusterMapById[a]?.count || 0));
-                    for (const childId of sorted) {
+                    for (const childId of children) {
                         rowHtml += buildHtml(childId, depth + 1);
+                    }
+                    const hidden = this.hiddenChildCount(cid);
+                    if (hidden > 0) {
+                        rowHtml += `<div class="bsim-node" style="padding-left:${28 + depth * 16}px; color:var(--accent); font-size:0.72rem;" onclick="ClusterDetailView.loadMoreChildren('${cid}')">
+                            + ${hidden} more…</div>`;
                     }
                 }
             }
@@ -348,12 +468,13 @@ window.ClusterDetailView = {
             return rowHtml;
         };
 
-        // Only the loaded slice of the hierarchy is drawn: the ancestor chain
-        // of the selected cluster, and whatever has been expanded under it.
-        const sortedRoots = [...this.rootNodes].sort((a, b) => (this.clusterMapById[b]?.count || 0) - (this.clusterMapById[a]?.count || 0));
-        for (const rootId of sortedRoots) {
-            html += buildHtml(rootId, 0);
-        }
+        // Ancestor path, furthest-first, down to the selected cluster, then
+        // its loaded descendants -- the bounded window fetchSlice() loaded.
+        const path = [...this.treeAncestors].reverse();
+        path.forEach((cid, i) => { html += buildHtml(cid, i); });
+        const centerDepth = path.length;
+        const centerId = this.clusterMapByUuid[this.selectedClusterUuid]?.cluster_id;
+        if (centerId !== undefined) html += buildHtml(String(centerId), centerDepth);
 
         treeContainer.innerHTML = html;
     },
@@ -365,16 +486,16 @@ window.ClusterDetailView = {
     },
 
     async selectNode(uuid) {
-        this.selectedClusterUuid = uuid;
-        let c = this.clusterMapByUuid[uuid];
-        if (!c) {
-            this.ingest(await this.fetchClusters({ cluster_uuid: uuid, show_parents: 'true', limit: '1' }));
-            c = this.clusterMapByUuid[uuid];
+        // Re-center the tree window on the newly selected node -- unless the
+        // caller (init) already loaded a slice centered here.
+        if (this._sliceCenteredOn !== uuid) {
+            await this.fetchSlice(uuid);
+            this._sliceCenteredOn = uuid;
         }
+        this.selectedClusterUuid = uuid;
+        const c = this.clusterMapByUuid[uuid];
         if (!c) return;
 
-        this.ensureTreeExpandedTo(c.cluster_id);
-        this.treeExpanded.add(String(c.cluster_id));
         this.renderTree();
         this.setBreadcrumb(c);
 
@@ -387,10 +508,6 @@ window.ClusterDetailView = {
 
         // Render header immediately
         document.getElementById('cluster-header').innerHTML = this.renderHeader(c);
-
-        // The selected node's own children, one level deep
-        await this.loadChildren(c.cluster_id);
-        this.renderTree();
 
         // Fetch members if not cached
         if (!this.memberCache[uuid]) {
@@ -566,7 +683,7 @@ window.ClusterDetailView = {
         } else {
             this.expandedGroups.add(uuid);
             const c = this.clusterMapByUuid[uuid];
-            if (c) await this.loadChildren(c.cluster_id);
+            if (c && !this.childrenLoaded.has(String(c.cluster_id))) await this.loadMoreChildren(c.cluster_id);
             if (!this.memberCache[uuid]) {
                 await this.fetchMembers(uuid);
             }
@@ -711,15 +828,20 @@ window.ClusterDetailView = {
             tbody.appendChild(tr);
         }
 
-        // 2b. Children
-        // Sort children by count descending
-        const sortedChildren = [...children].sort((a, b) => (this.clusterMapById[b]?.count || 0) - (this.clusterMapById[a]?.count || 0));
-
-        for (const childId of sortedChildren) {
+        // 2b. Children -- already sorted count-desc and capped by the server (see cluster_utils.cluster_children_page)
+        for (const childId of children) {
             const child = this.clusterMapById[childId];
             if (child) {
                 this.renderHierarchicalGroups(tbody, child.cluster_uuid, targetDepth);
             }
+        }
+        const hiddenChildren = this.hiddenChildCount(String(c.cluster_id));
+        if (hiddenChildren > 0) {
+            const tr = document.createElement('tr');
+            tr.className = 'bsim-grp-row';
+            tr.onclick = () => this.loadMoreChildren(c.cluster_id);
+            tr.innerHTML = `<td colspan="3" style="padding-left: ${12 + targetDepth * 20}px; color:var(--accent);">+ ${hiddenChildren} more groups…</td>`;
+            tbody.appendChild(tr);
         }
     },
 

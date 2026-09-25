@@ -12,6 +12,9 @@ from bsimvis.app.services.cluster_utils import (
     flatten_tag_distribution,
     function_count_stats,
     normalize_tag_distribution,
+    cluster_tree_slice,
+    cluster_children_page,
+    get_tree_links,
 )
 
 job_service = JobService()
@@ -177,6 +180,106 @@ def _get_matching_ids(r, collection, level, field, val):
     return matching_ids
 
 
+def _shape_bin_cluster_result(m, child_to_parent, parent_to_children):
+    """meta blob -> the dict shape the UI expects (parent, has_children, distributions)."""
+    cid = str(m.get("cluster_id"))
+    return {
+        "cluster_id": m.get("cluster_id"),
+        "cluster_uuid": m.get("cluster_uuid"),
+        "cluster_name": m.get("cluster_name"),
+        "tag_id": m.get("tag_id", m.get("cluster_id")),
+        "user_tags": m.get("user_tags", []),
+        "is_custom_name": m.get("is_custom_name", False),
+        "avg_stability": m.get("avg_stability", 0.0),
+        "cohesion_score": m.get("cohesion_score", 0),
+        "count": m.get("member_count"),
+        "created_at": m.get("created_at"),
+        "parent": child_to_parent.get(cid),
+        "snippet": m.get("snippet", ""),
+        "sample_members": m.get("sample_members", []),
+        "filename_distribution": m.get("filename_distribution", []),
+        "md5_distribution": m.get("md5_distribution", []),
+        "tag_distribution": normalize_tag_distribution(
+            m.get("tag_distribution", {}),
+            m.get("member_count") or 0,
+            m.get("cohesion_score"),
+        ),
+        "architecture_distribution": m.get("architecture_distribution", []),
+        "executable_format_distribution": m.get("executable_format_distribution", []),
+        "batch_uuid_distribution": m.get("batch_uuid_distribution", []),
+        "function_count_stats": m.get("function_count_stats", {}),
+        "has_children": bool(parent_to_children.get(cid)),
+        "child_total": len(parent_to_children.get(cid, [])),
+    }
+
+
+def _list_bin_clusters_slice(collection, algo, r):
+    """The `slice` fast path for non-pool binary clusters -- see
+    cluster.py's _list_clusters_slice / cluster_utils.cluster_tree_slice.
+
+    ponytail: pool bin-clusters skip this (their meta key namespacing
+    branches on collection_style_pool_keys, not a clean {collection}:{prefix}:
+    {algo}:{cid}:meta shape); they keep the old full-scan path until a pool
+    tree is reported slow too.
+    """
+    parent_q = request.args.get("parent", "").strip()
+    if parent_q:
+        width = request.args.get("width", 10, type=int)
+        offset = request.args.get("offset", 0, type=int)
+        metas, total_children = cluster_children_page(
+            r,
+            collection,
+            algo,
+            parent_q,
+            offset=offset,
+            width=width,
+            meta_prefix="bin_cluster",
+        )
+        _, parent_to_children = get_tree_links(r, collection, algo, "bin_cluster")
+        child_to_parent = {cid: parent_q for cid in metas}
+        results = [
+            _shape_bin_cluster_result(m, child_to_parent, parent_to_children)
+            for m in metas.values()
+        ]
+        results.sort(key=lambda x: x.get("count") or 0, reverse=True)
+        return {
+            "collection": collection,
+            "algo": algo,
+            "total": total_children,
+            "results": results,
+        }
+
+    slice_uuid = request.args.get("slice", "").strip()
+    up = request.args.get("up", 3, type=int)
+    down = request.args.get("down", 3, type=int)
+    width = request.args.get("width", 10, type=int)
+    metas, center, hidden_above = cluster_tree_slice(
+        r,
+        collection,
+        algo,
+        slice_uuid,
+        up=up,
+        down=down,
+        width=width,
+        meta_prefix="bin_cluster",
+    )
+    child_to_parent, parent_to_children = get_tree_links(
+        r, collection, algo, "bin_cluster"
+    )
+    results = [
+        _shape_bin_cluster_result(m, child_to_parent, parent_to_children)
+        for m in metas.values()
+    ]
+    return {
+        "collection": collection,
+        "algo": algo,
+        "total": len(results),
+        "center_cluster_id": center,
+        "hidden_above": hidden_above,
+        "results": results,
+    }
+
+
 def list_bin_clusters():
     """Lists discovered binary clusters with metadata, filtering, and sorting."""
     t_start = time.perf_counter()
@@ -268,6 +371,8 @@ def list_bin_clusters():
             else f"global:pool:{pool_id}:bin_cluster:"
         )
     else:
+        if request.args.get("slice") or request.args.get("parent"):
+            return _list_bin_clusters_slice(collection, algo, r)
         cluster_list_key = f"{collection}:bin_cluster:list:{algo}"
         meta_prefix = f"{collection}:bin_cluster:{algo}:"
 
