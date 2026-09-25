@@ -174,6 +174,9 @@ def build_tag_distribution(by_axis, member_count, limit=None):
             if ":" not in tag_id:
                 continue
             chain = [p for p in tag_prefixes(tag_id) if p != axis]
+            body, detail = tag_body(tag_id)
+            if detail and body != axis:
+                chain.append(body)
             if tag_id != axis:
                 chain.append(tag_id)
             parent = None
@@ -255,6 +258,8 @@ def _member_tag_values(meta):
             candidates = set(tag_prefixes(tag))
             if detail or ":" in body:
                 candidates.add(body)
+            if detail:
+                candidates.add(tag)
             elif source == "user":
                 candidates.add(f"user:{body}")
             values.extend(
@@ -611,6 +616,15 @@ def fetch_bin_cluster_meta_all_axes(
     return meta_by_uuid, uuids_per_entry_by_axis
 
 
+def _walk(distribution):
+    for nodes in distribution.values():
+        stack = list(nodes)
+        while stack:
+            node = stack.pop()
+            yield node
+            stack.extend(node["children"])
+
+
 def demo():
     """The collision this resolver exists for: one label, two namespaces."""
 
@@ -677,6 +691,19 @@ def demo():
     shared = root["children"][0]
     assert shared["tag_id"] == "av:clamav" and shared["count"] == 1, shared
     assert len(shared["children"]) == 2, shared["children"]
+
+    # A `#detail` tail is the deepest node, hung off its body.
+    summary = cluster_summary(
+        [{"tags": ["yara:unknown:unknown#rule_x"]}] * 10, member_count=10
+    )
+    nodes = {n["tag_id"]: n for n in _walk(summary["tag_distribution"])}
+    body = nodes["yara:unknown:unknown"]
+    assert [c["tag_id"] for c in body["children"]] == [
+        "yara:unknown:unknown#rule_x"
+    ], body
+    assert inferred_tag_values(summary, 0.9, 0.5, 0.5) == [
+        "yara:unknown:unknown#rule_x"
+    ]
 
     # resolve_hierarchical_inferred_tags: most specific passing cluster wins,
     # never a union of the ancestors a leaf survives into.
