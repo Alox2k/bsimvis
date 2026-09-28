@@ -1245,10 +1245,10 @@ function fileSimTableParams(prefixes, extra = {}) {
         limit: BINSIM_LIMIT,
         sort_col: sort.col,
         sort_dir: sort.dir === -1 ? 'desc' : 'asc',
-        collapse: 'name',
         ...binSimFilterParams('matched'),
         ...extra,
     });
+    if (fileSimGroupBy === 'none') params.set('collapse', 'name');
     const state = FILESIM_TAB_STATES[fileSimTab] || '';
     if (state) params.set('state', state);
     if (prefixes && prefixes.length) params.set('tags', prefixes.join(','));
