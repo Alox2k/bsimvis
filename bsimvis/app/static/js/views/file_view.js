@@ -1470,6 +1470,7 @@ window.FileView = {
                     (f.tags || []).forEach(t => {
                         counts[t] = (counts[t] || 0) + 1;
                         TagColor.chain(t).forEach(id => ancestors.add(id));
+                        ancestors.add(t); // exact tag too -- chain() stops at the detail-stripped group
                     });
                     ancestors.forEach(id => { funcCounts[id] = (funcCounts[id] || 0) + 1; });
                 });
@@ -1633,7 +1634,12 @@ window.FileView = {
                             title="Analysis Tag: ${escapeAttr(fullId)} (click for source)">${escapeHtml(fullId)}</span>`;
             }
             const funcCount = this.fvTagFuncCountFor(n.id);
-            const funcClick = `FileView.openTagFunctions(event, ${jsString(n.id)})`;
+            // A group node's id is a prefix, not a stored tag -- the search
+            // needs a trailing '*' to match anything under it. A leaf's id is
+            // an exact stored tag (or, past a '#', the full detail tag itself
+            // since fvTagsTree builds deep), so it searches exact.
+            const searchId = hasKids ? n.id + '*' : n.id;
+            const funcClick = `FileView.openTagFunctions(event, ${jsString(searchId)})`;
             // Distinct-function count crossing this (inherited) file tag
             // against the functions that actually carry it -- an
             // `origin_parent`-folded tag like `fid:libc` or `boilerplate:runtime`
