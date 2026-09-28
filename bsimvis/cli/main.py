@@ -532,9 +532,10 @@ def main():
         "-C",
         "--config",
         dest="config",
-        default="bsimvis_config.toml",
+        default=None,
         metavar="FILE",
-        help="Config file",
+        help="Config file (default: bsimvis_config.toml in cwd, else "
+        "~/.config/bsimvis/bsimvis_config.toml)",
     )
 
     upload_parser.add_argument(
