@@ -7496,6 +7496,7 @@ def print_summary():
     with open(report_path, "w") as fh:
         json.dump(results, fh, indent=2)
     print(f"\n  Report saved → {_color(report_path, CYAN)}")
+    return failed
 
 
 # ---------------------------------------------------------------------------
@@ -7595,4 +7596,4 @@ if __name__ == "__main__":
 
     for step in steps:
         step()
-    print_summary()
+    sys.exit(1 if print_summary() else 0)
