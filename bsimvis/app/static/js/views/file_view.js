@@ -1303,110 +1303,44 @@ window.FileView = {
     // them. The namespace -> axis map comes from `/api/tags/colors`, so both
     // views put a tag on the same axis instead of each keeping its own table.
     fvAvailableAxes() {
-        const counts = this.fvTagCounts();
-        const axes = new Set();
-        Object.keys(counts).forEach(tagId => axes.add(TagColor.axisOf(tagId)));
-        return [...axes].sort();
+        return TagTree.axes(Object.keys(this.fvTagCounts()));
     },
 
-    // One trie over the tag ids, the same shape Bin Sim's tree has: a node id is
-    // a real tag id and a literal prefix of everything beneath it, depth is
-    // whatever the ids have, and a detail tail is never a level -- so the
-    // function a library was matched on cannot become a category of its own.
-    //
-    // This used to read `fileSimTagParts`, which flattened every id to
-    // name/version and could only ever draw two levels.
+    // One trie over the tag ids, built by the same code Bin Sim's pairwise
+    // tree uses for its own nesting (`TagTree`): a node id is a real tag id
+    // and a literal prefix of everything beneath it, depth is whatever the
+    // ids have, and a detail tail is never a level. `this.fvAxis === ''` is
+    // the "all axes" mode -- every namespace the file's functions carry shows
+    // up as its own top-level group instead of picking one axis to view.
     fvTree() {
-        const counts = this.fvTagCounts();
-        const axis = this.fvAxis;
-        const root = { children: new Map() };
-
-        Object.entries(counts).forEach(([tagId, count]) => {
-            if (TagColor.axisOf(tagId) !== axis) return;
-            let node = root;
-            TagColor.chain(tagId).forEach(prefix => {
-                let next = node.children.get(prefix);
-                if (!next) {
-                    const segs = TagColor.levels(prefix).segs;
-                    next = {
-                        id: prefix, prefix,
-                        label: segs[segs.length - 1] || prefix,
-                        count: 0, children: new Map(),
-                    };
-                    node.children.set(prefix, next);
-                }
-                next.count += count;
-                node = next;
-            });
-        });
-
-        const finish = (node) => {
-            const kids = [...node.children.values()].map(finish);
-            kids.sort((a, b) => b.count - a.count);
-            node.children = kids;
-            return node;
-        };
-        let nodes = finish(root).children;
-        // The picker already names the namespace, so a lone top node repeats it.
-        // One level only, matching Bin Sim.
-        if (nodes.length === 1 && nodes[0].children.length) nodes = nodes[0].children;
-        return nodes;
+        return TagTree.build(Object.entries(this.fvTagCounts()), this.fvAxis);
     },
 
     // --- Tags tab: same hierarchy tree as the function sidebar, sourced from
     // the file's own tag list instead of aggregating across functions. A
     // file's tags are already complete -- no paging, no fvTagIndex needed.
     fvTagsAvailableAxes() {
-        const tags = (this.file && this.file.tags) || [];
-        const axes = new Set();
-        tags.forEach(tagId => axes.add(TagColor.axisOf(tagId)));
-        return [...axes].sort();
+        return TagTree.axes((this.file && this.file.tags) || []);
     },
 
     fvTagsTree() {
-        const tags = (this.file && this.file.tags) || [];
-        const axis = this.fvTagsAxis;
-        const root = { children: new Map() };
-
-        tags.forEach(tagId => {
-            if (TagColor.axisOf(tagId) !== axis) return;
-            let node = root;
-            TagColor.chain(tagId).forEach(prefix => {
-                let next = node.children.get(prefix);
-                if (!next) {
-                    const segs = TagColor.levels(prefix).segs;
-                    next = {
-                        id: prefix, prefix,
-                        label: segs[segs.length - 1] || prefix,
-                        count: 0, children: new Map(),
-                    };
-                    node.children.set(prefix, next);
-                }
-                next.count += 1;
-                node = next;
-            });
-        });
-
-        const finish = (node) => {
-            const kids = [...node.children.values()].map(finish);
-            kids.sort((a, b) => b.count - a.count);
-            node.children = kids;
-            return node;
-        };
-        let nodes = finish(root).children;
-        if (nodes.length === 1 && nodes[0].children.length) nodes = nodes[0].children;
-        return nodes;
+        const counts = {};
+        ((this.file && this.file.tags) || []).forEach(t => { counts[t] = (counts[t] || 0) + 1; });
+        return TagTree.build(Object.entries(counts), this.fvTagsAxis);
     },
 
     fvTagsRenderAxisPicker() {
         const host = document.getElementById('fv-tags-axis-pick');
         if (!host) return;
         const avail = this.fvTagsAvailableAxes();
-        if (!avail.includes(this.fvTagsAxis)) this.fvTagsAxis = avail[0] || '';
+        // '' ("all axes") is always a valid selection -- only a stale named
+        // axis needs a fallback.
+        if (this.fvTagsAxis && !avail.includes(this.fvTagsAxis)) this.fvTagsAxis = '';
         host.innerHTML = !avail.length ? '' : `
             <div class="view-toggle" style="margin:0; flex:1; min-width:0;">
                 <span class="bsim-ctl-label" style="margin:4px 6px;">Axis:</span>
                 <select class="view-btn" style="flex:1; min-width:0;" onchange="FileView.setTagsTreeAxis(this.value)">
+                    <option value=""${this.fvTagsAxis === '' ? ' selected' : ''}>All axes</option>
                     ${avail.map(a => `<option value="${escapeAttr(a)}"${a === this.fvTagsAxis ? ' selected' : ''}>${escapeHtml(a)}</option>`).join('')}
                 </select>
             </div>`;
@@ -1494,13 +1428,16 @@ window.FileView = {
         const host = document.getElementById('fv-axis-pick');
         if (!host) return;
         const avail = this.fvAvailableAxes();
-        if (!avail.includes(this.fvAxis)) this.fvAxis = avail[0] || '';
+        // '' ("all axes") is always a valid selection -- only a stale named
+        // axis needs a fallback.
+        if (this.fvAxis && !avail.includes(this.fvAxis)) this.fvAxis = '';
         // Always shown -- every axis this file has tags on stays pickable
         // regardless of the current tag scope, not just while >1 exists.
         host.innerHTML = !avail.length ? '' : `
             <div class="view-toggle" style="margin:0; flex:1; min-width:0;">
                 <span class="bsim-ctl-label" style="margin:4px 6px;">Axis:</span>
                 <select class="view-btn" style="flex:1; min-width:0;" onchange="FileView.setTreeAxis(this.value)">
+                    <option value=""${this.fvAxis === '' ? ' selected' : ''}>All axes</option>
                     ${avail.map(a => `<option value="${escapeAttr(a)}"${a === this.fvAxis ? ' selected' : ''}>${escapeHtml(a)}</option>`).join('')}
                 </select>
             </div>`;

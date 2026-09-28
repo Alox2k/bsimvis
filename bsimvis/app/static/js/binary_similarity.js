@@ -623,13 +623,17 @@ const FILESIM_SEVERITY_ORDER = ['high', 'medium', 'low', 'none'];
 // by `TagColor`, so the tree nests exactly where the search index buckets and
 // where the colour rule changes hue. A detail tail contributes no level, which
 // is what keeps a function name out of the sankey's columns.
-function fileSimTagChain(tagId) {
+// `axis === ''` is the "all axes" mode: the chain's first element becomes
+// the tag's own axis name, so every namespace the pair carries shows up as
+// its own top-level group instead of picking one axis to view.
+function fileSimTagChain(tagId, axis) {
     const chain = TagColor.prefixes(tagId);
     chain.push(TagColor.groupId(tagId));
+    if (axis === '') chain.unshift(TagColor.axisOf(tagId));
     return chain;
 }
 
-function fileSimNestedNodes(rows) {
+function fileSimNestedNodes(rows, axis) {
     const root = { children: new Map() };
 
     const add = (tagId, a, b, drift, score, weight) => {
@@ -637,11 +641,12 @@ function fileSimNestedNodes(rows) {
         // dissimilarity, so it must not drag its parent's mean down.
         if (a === 0 && b === 0) return;
         let node = root;
-        fileSimTagChain(tagId).forEach(prefix => {
+        fileSimTagChain(tagId, axis).forEach(prefix => {
             let next = node.children.get(prefix);
             if (!next) {
                 next = {
                     id: prefix, label: fileSimLeafLabel(prefix), prefix,
+                    axisHead: axis === '' && prefix === TagColor.axisOf(tagId),
                     a: 0, b: 0, simNum: 0, simDen: 0,
                     children: new Map(), drift: {}, tagIds: [],
                 };
@@ -681,18 +686,31 @@ function fileSimNestedNodes(rows) {
         add(row.tag_id, a, b, row.drift, +row.score || 0, +row.score_weight || 0);
     });
 
-    return fileSimNestedFinish(root).children;
+    return fileSimNestedFinish(root, axis).children;
 }
 
 // Map of children -> sorted array, and a similarity for every node. Depth is
 // unbounded, so this recurses rather than unrolling levels the way origin does.
-function fileSimNestedFinish(node) {
+// `axisCtx` is the axis governing *this node's children*'s sort order --
+// severity is ordinal, everything else sorts by mass/score. In "all axes"
+// mode an axis-head node (`severity`, `category`, ...) hands its own id down
+// as the context for its own children, so severity still reads worst-first
+// even when it is one branch among several rather than the whole tree.
+function fileSimNestedFinish(node, axisCtx) {
     const kids = [...node.children.values()]
-        .map(fileSimNestedFinish)
+        .map(k => fileSimNestedFinish(k, k.axisHead ? k.id : axisCtx));
+    if (axisCtx === 'severity') {
+        const rank = (n) => {
+            const i = FILESIM_SEVERITY_ORDER.indexOf(n.label);
+            return i === -1 ? FILESIM_SEVERITY_ORDER.length : i;
+        };
+        kids.sort((x, y) => rank(x) - rank(y));
+    } else {
         // Mass breaks ties, because scores tie constantly: a pair that matched
         // nothing scores every tag 0, and ordering that by score alone leaves
         // the tree in whatever order the summary happened to arrive in.
-        .sort((x, y) => (y.sim - x.sim) || ((y.a + y.b) - (x.a + x.b)));
+        kids.sort((x, y) => (y.sim - x.sim) || ((y.a + y.b) - (x.a + x.b)));
+    }
     node.children = kids;
     // A leaf scores on its own matched mass; a branch is the mean of what is
     // under it, so one absent family still shows instead of being averaged away
@@ -709,21 +727,17 @@ function fileSimNestedFinish(node) {
 // string. Origin used to have its own builder that minted ids like
 // `libraries/Visual Studio` -- which no colour rule and no index had ever seen,
 // so a library drew one colour in the tree and another on its own card.
+//
+// `axis === ''` is "all axes": every namespace the pair carries mass on
+// becomes its own top-level group instead of picking one axis to view.
 function fileSimTree(rows, axis) {
-    let live = fileSimNestedNodes(rows);
+    let live = fileSimNestedNodes(rows, axis);
     // The tab already names the namespace, so a lone top node just repeats it:
     // an Origin tree that opens on "origin" before it says "libc" wastes the
     // level. One level only, so a pair carrying nothing but libraries still
     // opens on `lib` rather than being drilled down to a bare version number.
-    if (live.length === 1 && (live[0].children || []).length) live = live[0].children;
-    // Severity is ordinal: worst first reads better than biggest first.
-    if (axis === 'severity') {
-        const rank = (n) => {
-            const i = FILESIM_SEVERITY_ORDER.indexOf(n.label);
-            return i === -1 ? FILESIM_SEVERITY_ORDER.length : i;
-        };
-        live = live.slice().sort((x, y) => rank(x) - rank(y));
-    }
+    // Not done in "all axes" mode -- there the top nodes are the axis labels.
+    if (axis && live.length === 1 && (live[0].children || []).length) live = live[0].children;
     return {
         id: 'root', label: 'All', prefix: null, children: live, drift: {},
         a: live.reduce((s, g) => s + g.a, 0),
@@ -741,9 +755,11 @@ function fileSimAvailableAxes() {
     return Object.keys(FILESIM_AXES).filter(k => (data[FILESIM_AXES[k].field] || []).length);
 }
 
-// The axis the tree, the tables and the graph read. Falls back to whatever the
-// pair has, so a stale selection from the previous pair cannot blank the view.
+// The axis the tree, the tables and the graph read. '' ("all axes") is always
+// valid; a stale named selection from the previous pair falls back instead of
+// blanking the view.
 function fileSimAxisKey() {
+    if (fileSimAxisA === '') return '';
     const have = fileSimAvailableAxes();
     return have.includes(fileSimAxisA) ? fileSimAxisA : (have[0] || 'origin');
 }
@@ -759,9 +775,15 @@ function fileSimDefaultOpen() {
 }
 
 // Rebuilt per render: cheap (tens of rows) and always consistent with the cache.
+// "All axes" concatenates every axis's own precomputed summary rows -- each
+// row's tag_id already carries its namespace, so nothing downstream needs to
+// know which field a row came from.
 function fileSimTreeRoot() {
     const axis = fileSimAxisKey();
-    const rows = (binSimDataCache && binSimDataCache[FILESIM_AXES[axis].field]) || [];
+    const data = binSimDataCache || {};
+    const rows = axis === ''
+        ? fileSimAvailableAxes().flatMap(a => data[FILESIM_AXES[a].field] || [])
+        : (data[FILESIM_AXES[axis].field] || []);
     return fileSimTree(rows, axis);
 }
 
@@ -789,7 +811,8 @@ function fileSimScopeRows(rows) {
     // By levels, not by text: `startsWith(p + ':')` reads
     // `fid:uclibc:0.9.30.1#xdrmem_getint32` as outside `fid:uclibc:0.9.30.1`,
     // because the next character is the detail marker rather than a colon.
-    return rows.filter(r => prefixes.some(p => fileSimTagChain(r.tag_id).includes(p)));
+    const axis = fileSimAxisKey();
+    return rows.filter(r => prefixes.some(p => fileSimTagChain(r.tag_id, axis).includes(p)));
 }
 
 // The tag prefixes the current selection sends to the backend. A group node has
@@ -887,23 +910,29 @@ function fileSimDriftLabel(tagId) {
     return tagId;
 }
 
-// Both axis pickers, offering only the axes this pair carries tags on. With one
-// axis there is nothing to pick, so neither control is drawn at all.
+// Both axis pickers, offering only the axes this pair carries tags on, plus
+// "All axes" on the left picker -- grouping the whole tree by namespace
+// instead of picking one. Shown whenever the pair has any tags at all, even
+// with one axis, so "All axes" always has somewhere to switch back from.
 function renderFileSimAxisPicker() {
     const avail = fileSimAvailableAxes();
     const axisA = fileSimAxisKey();
     const host = document.getElementById('bsim-axis-pick');
     if (host) {
-        host.innerHTML = avail.length < 2 ? '' : `
+        host.innerHTML = !avail.length ? '' : `
             <span class="bsim-ctl-label">Axis:</span>
             <select class="view-btn" id="bsim-filesim-axis-a" onchange="setFileSimAxis(this.value, null)"
                     title="What the tree, the tables and the flow are grouped by">
+                <option value=""${axisA === '' ? ' selected' : ''}>All axes</option>
                 ${avail.map(k => `<option value="${k}"${axisA === k ? ' selected' : ''}>${FILESIM_AXES[k].label}</option>`).join('')}
             </select>`;
     }
     const selB = document.getElementById('bsim-filesim-axis-b');
     const wrap = document.getElementById('bin-sim-filesim-axis-toggle');
-    const cross = avail.filter(k => k !== axisA);
+    // The cross-axis join needs one concrete axis on the left; "All axes"
+    // has none, so the second picker hides rather than offering a join that
+    // can't be computed.
+    const cross = axisA === '' ? [] : avail.filter(k => k !== axisA);
     if (selB) {
         selB.innerHTML = `<option value="">(none)</option>`
             + cross.map(k => `<option value="${k}"${fileSimAxisB === k ? ' selected' : ''}>${FILESIM_AXES[k].label}</option>`).join('');
@@ -1934,6 +1963,13 @@ function renderFileSimSankey(data) {
     // Rows come from whichever axis is on the left, scoped by that axis's own
     // tree -- selecting libc, or `network`, narrows the flow the same way.
     const axisA = fileSimAxisKey();
+    // The flow and its cross-axis join both need one concrete axis; "all
+    // axes" has no single set of columns to draw, so it reads as no scope
+    // rather than crashing on a missing FILESIM_AXES entry.
+    if (axisA === '') {
+        container.innerHTML = '<div style="display:flex; align-items:center; justify-content:center; height:100%; color:var(--dim);">Pick a single axis to see its flow.</div>';
+        return;
+    }
     const axisB = fileSimAxisB === axisA ? '' : fileSimAxisB;
     const rows = data[FILESIM_AXES[axisA].field] || [];
     const groups = fileSimSankeyGroups(
