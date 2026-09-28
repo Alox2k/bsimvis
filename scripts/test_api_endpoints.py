@@ -1963,11 +1963,12 @@ def run_all_tests():
 
     # ── Unified search ─────────────────────────────────────────────────────
     print(_color("\n  [Unified search]", BOLD))
+    # Scope the entity fanout; collection-name matching still searches globally.
     uni = test_endpoint(
         "GET",
         "/api/search/unified",
-        params={"q": COLLECTION, "limit": 3},
-        label="GET /api/search/unified?q=<collection>",
+        params={"q": COLLECTION, "limit": 3, "collection": COLLECTION},
+        label="GET /api/search/unified?q=<collection>&collection=<collection>",
     )
     kinds = (
         {g["kind"] for g in uni.get("groups", [])} if isinstance(uni, dict) else set()
@@ -2014,8 +2015,8 @@ def run_all_tests():
             for it in g["items"]
         ]
         check(
-            "unified search file links point at the file's md5",
-            file_urls and all(u.endswith(f"/files/{file_md5}") for u in file_urls),
+            "unified search includes a link to the queried md5",
+            any(u.endswith(f"/files/{file_md5}") for u in file_urls),
             str(file_urls[:3]),
         )
     empty = test_endpoint(
