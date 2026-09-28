@@ -784,8 +784,22 @@ def main(args):
     return 1 if failed_count else 0
 
 
-def load_config(path=DEFAULT_CONFIG_NAME):
-    with open(path, "rb") as f:
+def load_config(path=None):
+    """Load bsimvis_config.toml. No explicit --config: try cwd, then
+    ~/.config/bsimvis/, matching config_service's lookup so an installed
+    (uv tool) CLI works outside a repo checkout."""
+    if path is not None:
+        with open(path, "rb") as f:
+            return tomllib.load(f)
+
+    for candidate in (
+        Path(DEFAULT_CONFIG_NAME),
+        Path.home() / ".config" / "bsimvis" / DEFAULT_CONFIG_NAME,
+    ):
+        if candidate.exists():
+            with open(candidate, "rb") as f:
+                return tomllib.load(f)
+    with open(DEFAULT_CONFIG_NAME, "rb") as f:
         return tomllib.load(f)
 
 
@@ -859,9 +873,10 @@ def cli_main():
         "-C",
         "--config",
         dest="config",
-        default=DEFAULT_CONFIG_NAME,
+        default=None,
         metavar="FILE",
-        help="Config file",
+        help="Config file (default: bsimvis_config.toml in cwd, else "
+        "~/.config/bsimvis/bsimvis_config.toml)",
     )
 
     parser.add_argument(
