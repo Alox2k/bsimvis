@@ -24,7 +24,19 @@ def main():
     # Load environment variables from .env if present
     load_dotenv()
 
+    from importlib.metadata import version, PackageNotFoundError
+
+    try:
+        pkg_version = version("bsimvis")
+    except PackageNotFoundError:
+        pkg_version = "unknown"
+
     parser = argparse.ArgumentParser(prog="bsimvis", description="Unified BSimVis CLI")
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {pkg_version}",
+    )
     parser.add_argument(
         "-H",
         "--host",
