@@ -1527,7 +1527,7 @@ window.FileView = {
             const hasKids = n.children.length > 0;
             const open = this.fvTagsOpen.has(n.id);
             const caret = hasKids
-                ? `<span class="bsim-caret" onclick="event.stopPropagation(); FileView.toggleTagsTreeNode(${escapeAttr(jsString(n.id))})">${open ? '▾' : '▸'}</span>`
+                ? `<span class="bsim-caret" onclick="event.stopPropagation(); FileView.toggleTagsTreeNode(${escapeAttr(jsString(n.id))})">${open ? '▼' : '▶'}</span>`
                 : '<span class="bsim-caret"></span>';
             const removeClick = `FileView.removeTagInTree(event, ${jsString(n.id)})`;
             const addClick = `FileView.addTagInTree(event, ${jsString(n.id + ':')})`;
@@ -1626,7 +1626,7 @@ window.FileView = {
             const hasKids = n.children.length > 0;
             const open = this.fvOpen.has(n.id);
             const caret = hasKids
-                ? `<span class="bsim-caret" onclick="event.stopPropagation(); FileView.toggleTreeNode(${escapeAttr(jsString(n.id))})">${open ? '▾' : '▸'}</span>`
+                ? `<span class="bsim-caret" onclick="event.stopPropagation(); FileView.toggleTreeNode(${escapeAttr(jsString(n.id))})">${open ? '▼' : '▶'}</span>`
                 : '<span class="bsim-caret"></span>';
             out.push(`
             <div class="bsim-node${this.fvSelectedTag === n.id ? ' selected' : ''}" style="padding-left:${8 + depth * 14}px;"
