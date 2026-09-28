@@ -194,7 +194,7 @@ window.FileView = {
                             </span>
                         </div>
                         <div style="padding:0 12px 8px;">
-                            <input type="text" id="fv-tags-search" placeholder="Search tags..." style="width:100%; box-sizing:border-box; font-size:0.78rem;" oninput="FileView.setTagsQuery(this.value)">
+                            <input type="text" id="fv-tags-search" class="tag-input-field" placeholder="Search tags..." style="width:100%; box-sizing:border-box;" oninput="FileView.setTagsQuery(this.value)">
                         </div>
                         <div id="fv-tags-axis-pick" class="bsim-axis-pick"></div>
                         <div id="fv-tags-tree" class="bsim-tree"></div>
@@ -1577,23 +1577,31 @@ window.FileView = {
             // anchor for an analysis tag -- the popup keys off exact badge text.
             const fullId = !hasKids ? ((n.tagIds && n.tagIds[0]) || n.id) : null;
             const isUser = fullId && userSet.has(fullId);
-            const fullBadge = !fullId ? '' : isUser
-                ? `<span class="sim-tag-card" style="cursor:pointer; font-size:0.65rem; padding:1px 8px; margin:0 0 0 6px;"
-                        onmouseenter="showTooltip(event, ${escapeAttr(jsString(fullId))}, ${escapeAttr(jsString(collection))})"
-                        onmouseleave="hideTooltip()"
-                        oncontextmenu="handleTagContextMenu(event, ${escapeAttr(jsString(fullId))})">${escapeHtml(fullId)}</span>`
-                : `<span class="analysis-tag-badge" style="cursor:pointer; margin:0 0 0 6px;" data-eid="${escapeAttr(eid)}"
-                        title="Analysis Tag: ${escapeAttr(fullId)} (click for source)">${escapeHtml(fullId)}</span>`;
+            let fullBadge = '';
+            if (fullId) {
+                // Same colour rule and markup as every other tag chip in the
+                // app (`renderTagEditor`'s analysisBadge/userBadge), not a
+                // generic grey pill -- and it sits right after the label
+                // instead of the label's flex:1 stranding it at the far edge.
+                const color = window.tagInk(window.getTagMetadata(fullId).color);
+                fullBadge = isUser
+                    ? `<span class="sim-tag-card" style="border-color:${tagAlpha(color, 27)}; color:${color}; background:${tagAlpha(color, 7)}; cursor:pointer; font-size:0.65rem; padding:1px 8px;"
+                            onmouseenter="showTooltip(event, ${escapeAttr(jsString(fullId))}, ${escapeAttr(jsString(collection))})"
+                            onmouseleave="hideTooltip()"
+                            oncontextmenu="handleTagContextMenu(event, ${escapeAttr(jsString(fullId))})">${escapeHtml(fullId)}</span>`
+                    : `<span class="analysis-tag-badge" style="cursor:pointer; border-color:${tagAlpha(color, 40)}; color:${color}; background:${tagAlpha(color, 7)};" data-eid="${escapeAttr(eid)}"
+                            title="Analysis Tag: ${escapeAttr(fullId)} (click for source)">${escapeHtml(fullId)}</span>`;
+            }
             out.push(`
             <div class="bsim-node" style="padding-left:${8 + depth * 14}px;">
                 ${caret}
                 ${dot(n.id)}
-                <span class="bsim-node-label">${escapeHtml(n.label)}</span>
-                <span class="bsim-node-count">${n.count}</span>
+                <span class="bsim-node-label" style="flex:0 1 auto;">${escapeHtml(n.label)}</span>
                 ${fullBadge}
-                <span class="bsim-side-actions">
-                    <span onclick="${escapeAttr(addClick)}" title="Add a tag under ${escapeAttr(n.id)}">+</span>
-                    ${n.count && !hasKids ? `<span onclick="${escapeAttr(removeClick)}" title="Remove ${escapeAttr(n.id)}">×</span>` : ''}
+                <span style="margin-left:auto; display:flex; align-items:center; gap:4px; flex-shrink:0;">
+                    <span class="bsim-node-count">${n.count}</span>
+                    <button class="add-tag-btn" onclick="${escapeAttr(addClick)}" title="Add a tag under ${escapeAttr(n.id)}">+</button>
+                    ${n.count && !hasKids ? `<span class="remove-tag-btn" onclick="${escapeAttr(removeClick)}" style="background:var(--hover);" title="Remove ${escapeAttr(n.id)}">×</span>` : ''}
                 </span>
             </div>`);
             if (open) n.children.forEach(c => walk(c, depth + 1));
