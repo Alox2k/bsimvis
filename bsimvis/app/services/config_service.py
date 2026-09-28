@@ -41,18 +41,20 @@ class ConfigService:
         return cls._instance
 
     def _load_config(self):
+        # ponytail: cwd config wins (repo dev flow); ~/.config is fallback
+        # for a `uv tool install`ed CLI run outside a checkout.
+        candidates = [
+            Path(DEFAULT_CONFIG_NAME),
+            Path.home() / ".config" / "bsimvis" / DEFAULT_CONFIG_NAME,
+            Path("bsimvis_config.toml.example"),
+        ]
         try:
-            config_path = Path(DEFAULT_CONFIG_NAME)
-            if config_path.exists():
-                with open(config_path, "rb") as f:
-                    self._config = tomllib.load(f)
-            else:
-                example_path = Path("bsimvis_config.toml.example")
-                if example_path.exists():
-                    with open(example_path, "rb") as f:
+            for config_path in candidates:
+                if config_path.exists():
+                    with open(config_path, "rb") as f:
                         self._config = tomllib.load(f)
-                else:
-                    self._config = {}
+                    return
+            self._config = {}
         except Exception as e:
             logging.warning(f"Failed to load default config: {e}")
             self._config = {}
