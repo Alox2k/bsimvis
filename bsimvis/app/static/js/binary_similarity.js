@@ -1627,7 +1627,7 @@ const FILESIM_AXES = {
 };
 // Which axis is on each side. An empty B is a single-axis view.
 let fileSimAxisA = 'origin';
-let fileSimAxisB = 'category';
+let fileSimAxisB = '';
 
 // Key layout of the stored joint table, mirroring bin_sim_tags.JOINT_INNER_AXES:
 // origin is the outer key, the rest are packed into the inner key in this order.
