@@ -5,6 +5,7 @@ import random
 import logging
 from .redis_client import get_redis
 from bsimvis.app.services.index_config import tag_ancestors
+from bsimvis.app.services.tag_taxonomy import default_priority_for_tag
 from bsimvis.app.services.index_service import (
     get_pool_id,
     resolve_origin_collection,
@@ -537,7 +538,8 @@ class TagService:
         collection = _normalize_collection(collection)
         meta_key = f"{collection}:tags_metadata"
         if not self.r.hexists(meta_key, tag):
-            self.r.hset(meta_key, tag, json.dumps({"priority": 0}))
+            priority = default_priority_for_tag(tag)
+            self.r.hset(meta_key, tag, json.dumps({"priority": priority}))
 
             # Propagate tag metadata to pools containing this collection
             associated_pools = self.r.smembers(f"{collection}:pools")
@@ -545,7 +547,7 @@ class TagService:
                 p_id = p_id.decode() if isinstance(p_id, bytes) else p_id
                 pool_meta_key = f"global:pool:{p_id}:tags_metadata"
                 if not self.r.hexists(pool_meta_key, tag):
-                    self.r.hset(pool_meta_key, tag, json.dumps({"priority": 0}))
+                    self.r.hset(pool_meta_key, tag, json.dumps({"priority": priority}))
 
     def get_tags(self, collection):
         """Returns the global tag index for a collection."""

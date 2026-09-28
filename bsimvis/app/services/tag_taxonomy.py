@@ -478,6 +478,23 @@ def color_config():
     }
 
 
+def default_priority_for_tag(tag_id):
+    """Default hero-card priority for a newly-seen tag, by namespace.
+
+    Severity outranks category outranks an origin detector's own finding;
+    everything else (user tags, capa/mitre/yara/...) defaults to 0. A stored
+    priority always wins over this -- see `_ensure_tag_metadata`.
+    """
+    ns = tag_body(str(tag_id or ""))[0].split(":", 1)[0]
+    if ns == "severity":
+        return 100
+    if ns == "category":
+        return 80
+    if ns in ORIGIN_NAMESPACES:
+        return 50
+    return 0
+
+
 def namespaced(tag_id):
     """A tag id with a namespace guaranteed: bare `mytag` -> `user:mytag`.
 
