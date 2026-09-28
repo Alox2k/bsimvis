@@ -756,7 +756,7 @@ function attachTagAutocomplete(input, onSelect) {
         });
     };
 
-    const renderSuggestions = (tags) => {
+    const renderSuggestions = (tags, totalCount = tags.length) => {
         dropdown.innerHTML = '';
         currentSuggestions = tags;
         activeIndex = -1;
@@ -783,15 +783,25 @@ function attachTagAutocomplete(input, onSelect) {
             };
             dropdown.appendChild(item);
         });
+        if (totalCount > tags.length) {
+            const more = document.createElement('div');
+            more.className = 'dim';
+            more.style.cssText = 'font-size:0.6rem; padding:4px 8px; text-align:center;';
+            more.textContent = `${totalCount} matching, showing ${tags.length} — keep typing to narrow`;
+            dropdown.appendChild(more);
+        }
         positionDropdown();
         dropdown.style.display = 'block';
     };
 
+    const MAX_SUGGESTIONS = 50;
+
     const showSuggestions = (filter = '') => {
         const query = filter.toLowerCase().trim();
-        const tags = Object.keys(tagMetadata).filter(t => t.toLowerCase().includes(query));
+        const matched = Object.keys(tagMetadata).filter(t => t.toLowerCase().includes(query));
+        const tags = matched.slice(0, MAX_SUGGESTIONS);
         if (tags.length > 0) {
-            renderSuggestions(tags);
+            renderSuggestions(tags, matched.length);
         } else {
             dropdown.style.display = 'none';
             currentSuggestions = [];
@@ -799,9 +809,13 @@ function attachTagAutocomplete(input, onSelect) {
         }
     };
 
+    let debounceTimeout;
     input.onfocus = () => showSuggestions(input.value);
     input.onclick = () => showSuggestions(input.value);
-    input.oninput = () => showSuggestions(input.value);
+    input.oninput = () => {
+        clearTimeout(debounceTimeout);
+        debounceTimeout = setTimeout(() => showSuggestions(input.value), 120);
+    };
     input.onblur = () => {
         setTimeout(() => {
             dropdown.style.display = 'none';
@@ -936,9 +950,13 @@ function attachAutocomplete(input, level, field, onSelect) {
         }
     };
 
+    let debounceTimeout;
     input.onfocus = () => showSuggestions(input.value);
     input.onclick = () => showSuggestions(input.value);
-    input.oninput = () => showSuggestions(input.value);
+    input.oninput = () => {
+        clearTimeout(debounceTimeout);
+        debounceTimeout = setTimeout(() => showSuggestions(input.value), 150);
+    };
     input.onblur = () => {
         setTimeout(() => {
             dropdown.style.display = 'none';
