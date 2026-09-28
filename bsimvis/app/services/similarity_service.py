@@ -2499,6 +2499,7 @@ class SimilarityService:
             _zadd_score_split,
             discover_edges,
             load_vectors,
+            stored_discovery,
             stored_unweighted_match,
         )
 
@@ -2530,9 +2531,19 @@ class SimilarityService:
         if min_cohesion is None:
             min_cohesion = config_service.get("clustering.min_cohesion", 0.5)
         min_cohesion = float(min_cohesion)
-        discovery = bool(file_sim_params.get("discovery", False))
-        discovery_min_score = float(file_sim_params.get("discovery_min_score", 0.5))
-        discovery_max_df = float(file_sim_params.get("discovery_max_df", 1.0))
+        discovery = bool(file_sim_params.get("discovery", stored_discovery()))
+        discovery_min_score = float(
+            file_sim_params.get(
+                "discovery_min_score",
+                config_service.get("similarity.discovery_min_score", 0.5),
+            )
+        )
+        discovery_max_df = float(
+            file_sim_params.get(
+                "discovery_max_df",
+                config_service.get("similarity.discovery_max_df", 1.0),
+            )
+        )
 
         r = self.r
         start_time = time.time()
