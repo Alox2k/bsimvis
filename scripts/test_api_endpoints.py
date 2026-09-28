@@ -6323,6 +6323,11 @@ def test_pool_collection_equivalence():
                     )
                 )
                 meta = norm_meta(_json.loads(r.get(meta_fmt.format(cid=cid)) or "{}"))
+                # The two ingestion layouts create different batch UUIDs.
+                meta["batch_uuid_distribution"] = sorted(
+                    (row["count"], row["percent"])
+                    for row in meta.get("batch_uuid_distribution", [])
+                )
                 # File ids embed the namespace; the fallback name embeds one too.
                 for sample in meta.get("sample_members", []):
                     sample["id"] = sample["id"].rsplit(":", 1)[-1]
