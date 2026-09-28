@@ -23,21 +23,28 @@ const TagTree = (() => {
     // level of the trie is the axis name itself, so every namespace a tag set
     // carries shows up as its own group, with that axis's usual chain nested
     // underneath exactly as a single-axis tree would draw it.
-    function build(entries, axis) {
+    // deep: also nest past a tag's detail tail (`yara:family:variant#rule`),
+    // one more level below the group node, labelled with the detail text --
+    // off by default since a caller aggregating across many functions (the
+    // sidebar tree) would otherwise explode into one leaf per function.
+    function build(entries, axis, deep) {
         const root = { children: new Map() };
         (entries || []).forEach(([tagId, count]) => {
             const a = TagColor.axisOf(tagId);
             if (axis && a !== axis) return;
             let node = root;
             const chain = axis ? TagColor.chain(tagId) : [a, ...TagColor.chain(tagId)];
+            const detailText = deep ? TagColor.detail(tagId) : null;
+            if (detailText !== null) chain.push(tagId);
             chain.forEach(prefix => {
                 let next = node.children.get(prefix);
                 if (!next) {
                     const isAxisHead = !axis && prefix === a;
-                    const segs = isAxisHead ? [] : TagColor.levels(prefix).segs;
+                    const isDetail = detailText !== null && prefix === tagId;
+                    const segs = (isAxisHead || isDetail) ? [] : TagColor.levels(prefix).segs;
                     next = {
                         id: prefix, prefix,
-                        label: isAxisHead ? a : (segs[segs.length - 1] || prefix),
+                        label: isAxisHead ? a : (isDetail ? detailText : (segs[segs.length - 1] || prefix)),
                         axisHead: isAxisHead,
                         count: 0, children: new Map(), tagIds: [],
                     };

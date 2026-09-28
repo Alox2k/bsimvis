@@ -71,6 +71,16 @@ const TagColor = (() => {
         return parts(tagId).body;
     }
 
+    // The detail tail itself (the text after '#'), or null when the tag has
+    // none. A tree that wants to nest past the group (e.g. a yara rule name
+    // under `yara:family:variant`) reads this to add one more level.
+    function detail(tagId) {
+        const sep = (cfg && cfg.tag_detail) || '#';
+        const s = String(tagId);
+        const i = s.indexOf(sep);
+        return i === -1 ? null : s.slice(i + sep.length);
+    }
+
     // The levels a tag id occupies, outermost first, every one a real tag id:
     // `['fid', 'fid:libc', 'fid:libc:2.31']`. The tree in any view is this walk,
     // so a node id is always a string some tag actually produces -- which is
@@ -147,7 +157,7 @@ const TagColor = (() => {
 
     return {
         style, css, forTag, ready, hash32,
-        levels, prefixes, groupId, chain, axisOf,
+        levels, prefixes, groupId, detail, chain, axisOf,
         config: () => cfg,
     };
 })();

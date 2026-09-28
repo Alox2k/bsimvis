@@ -104,6 +104,11 @@ window.FileView = {
                 }
                 .bsim-node .bsim-node-label { flex:1; overflow:hidden; text-overflow:ellipsis; }
                 .bsim-node .bsim-node-count { font-size:0.68rem; color:var(--dim); font-family:'Consolas',monospace; }
+                .bsim-node .bsim-node-count.clickable {
+                    color:var(--accent); background:var(--hover); border:1px solid var(--border);
+                    border-radius:8px; padding:1px 6px; font-weight:600; cursor:pointer;
+                }
+                .bsim-node .bsim-node-count.clickable:hover { background:var(--accent); color:#fff; }
                 .bsim-chips { display:flex; flex-wrap:wrap; gap:6px; padding:0 12px 8px; min-height:0; }
                 .bsim-chip {
                     display:inline-flex; align-items:center; gap:6px; padding:3px 8px;
@@ -1543,7 +1548,7 @@ window.FileView = {
     fvTagsTree() {
         const counts = {};
         this.fvTagsAllIds().forEach(t => { counts[t] = (counts[t] || 0) + 1; });
-        return TagTree.build(Object.entries(counts), this.fvTagsAxis);
+        return TagTree.build(Object.entries(counts), this.fvTagsAxis, true);
     },
 
     // Keeps only nodes whose label or full tag id matches, plus every
@@ -1639,7 +1644,7 @@ window.FileView = {
             const funcCountHtml = funcCount === undefined
                 ? '<span class="bsim-node-count" style="color:var(--dim);" title="Counting functions…">…</span>'
                 : funcCount > 0
-                    ? `<span class="bsim-node-count" style="cursor:pointer;" onclick="${escapeAttr(funcClick)}" onauxclick="${escapeAttr(funcClick)}" title="${escapeAttr(funcCount + ' function(s) tagged ' + n.id + (this.fvTagFuncCountsCapped ? ' (capped at 20000 functions scanned)' : '') + ' -- click to filter, ctrl/middle-click to open')}">${funcCount}${this.fvTagFuncCountsCapped ? '+' : ''}</span>`
+                    ? `<span class="bsim-node-count clickable" onclick="${escapeAttr(funcClick)}" onauxclick="${escapeAttr(funcClick)}" title="${escapeAttr(funcCount + ' function(s) tagged ' + n.id + (this.fvTagFuncCountsCapped ? ' (capped at 20000 functions scanned)' : '') + ' -- click to filter, ctrl/middle-click to open')}">${funcCount}${this.fvTagFuncCountsCapped ? '+' : ''}</span>`
                     : '<span class="bsim-node-count" style="color:var(--dim);" title="No functions carry this tag">—</span>';
             out.push(`
             <div class="bsim-node" style="padding-left:${8 + depth * 14}px;">
