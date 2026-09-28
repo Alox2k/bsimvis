@@ -19,6 +19,19 @@ from bsimvis.app.services.cluster_utils import (
 _EMPTY_I = np.empty(0, dtype=np.int32)
 _EMPTY_F = np.empty(0, dtype=np.float32)
 
+
+def _file_meta_key(collection, file_id):
+    if collection.startswith("global:pool:"):
+        origin, md5 = file_id[len(f"{collection}:file:") :].rsplit(":", 1)
+        return f"{origin}:file:{md5}:meta"
+    full_id = (
+        file_id
+        if file_id.startswith(f"{collection}:file:")
+        else f"{collection}:file:{file_id}"
+    )
+    return f"{full_id}:meta"
+
+
 try:
     import hdbscan
 except ImportError:
@@ -523,9 +536,7 @@ class BinClusterService:
                 # already-prefixed id double-prefixes and the meta lookup
                 # silently misses -- blanking every threshold_uf cluster's
                 # tag_distribution and starving the inferred-tag gate.
-                prefix = f"{collection}:file:"
-                key = file_id if file_id.startswith(prefix) else f"{prefix}{file_id}"
-                m_pipe.get(f"{key}:meta")
+                m_pipe.get(_file_meta_key(collection, file_id))
             for file_id, raw_meta in zip(chunk, m_pipe.execute()):
                 m = {}
                 if raw_meta:
@@ -563,9 +574,7 @@ class BinClusterService:
         # md5 itself for a collection-qualified id.
         prefix = f"{collection}:file:"
         for label, members in cluster_members.items():
-            members = [
-                m if m.startswith(prefix) else f"{prefix}{m}" for m in members
-            ]
+            members = [m if m.startswith(prefix) else f"{prefix}{m}" for m in members]
             pipe.sadd(f"{collection}:bin_cluster:{algo_ns}:{label}:members", *members)
             pipe.sadd(
                 f"{collection}:bin_cluster:{algo_ns}:{label}:direct_members", *members
@@ -670,12 +679,13 @@ class BinClusterService:
             pipe.sadd(bucket_key_uuid, *members)
             pipe.sadd(f"{collection}:reg:file:bin_cluster_uuid", bucket_key_uuid)
 
-            _store_inferred_tags(
-                pipe,
-                collection,
-                dict(zip(members, member_metas)),
-                {fid: gated_inferred_tags for fid in members},
-            )
+            if not collection.startswith("global:pool:"):
+                _store_inferred_tags(
+                    pipe,
+                    collection,
+                    dict(zip(members, member_metas)),
+                    {fid: gated_inferred_tags for fid in members},
+                )
 
             inferred_mapping = {
                 "filename_distribution": "inferred_filename",
@@ -1863,7 +1873,7 @@ class BinClusterService:
             chunk = all_member_file_ids[i : i + 1000]
             m_pipe = r.pipeline(transaction=False)
             for file_id in chunk:
-                m_pipe.get(f"{file_id}:meta")
+                m_pipe.get(_file_meta_key(collection, file_id))
             results = m_pipe.execute()
             for idx, file_id in enumerate(chunk):
                 meta_res = results[idx]
@@ -2063,12 +2073,13 @@ class BinClusterService:
             resolve_leaves, idx_to_id, gated_by_label
         )
         pipe = r.pipeline(transaction=False)
-        _store_inferred_tags(
-            pipe,
-            collection,
-            {fid: all_member_meta[fid] for fid in resolve_file_ids},
-            resolved,
-        )
+        if not collection.startswith("global:pool:"):
+            _store_inferred_tags(
+                pipe,
+                collection,
+                {fid: all_member_meta[fid] for fid in resolve_file_ids},
+                resolved,
+            )
         pipe.execute()
 
         cluster_list_key = f"{collection}:bin_cluster:list:{algo_ns}"
