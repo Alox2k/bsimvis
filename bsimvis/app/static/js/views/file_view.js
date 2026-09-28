@@ -1610,8 +1610,8 @@ window.FileView = {
             const caret = hasKids
                 ? `<span class="bsim-caret" onclick="event.stopPropagation(); FileView.toggleTagsTreeNode(${escapeAttr(jsString(n.id))})">${open ? '▼' : '▶'}</span>`
                 : '<span class="bsim-caret"></span>';
-            const removeClick = `FileView.removeTagInTree(event, ${jsString(n.id)})`;
-            const addClick = `FileView.addTagInTree(event, ${jsString(n.id + ':')})`;
+            const removeClick = `event.stopPropagation(); FileView.removeTagInTree(event, ${jsString(n.id)})`;
+            const addClick = `event.stopPropagation(); FileView.addTagInTree(event, ${jsString(n.id + ':')})`;
             // A leaf's own id has its detail tail stripped for grouping, so the
             // full stored tag (`fid:libc:2.31#memcpy`, not `fid:libc:2.31`) is
             // read back from `tagIds`. It also doubles as the provenance-popup
@@ -1647,13 +1647,21 @@ window.FileView = {
             // (tag_ancestors in index_config.py), same rule the search index
             // buckets functions under. Click filters the Functions tab to it;
             // ctrl/middle-click opens the full function search in a new tab.
+            const clickableCount = funcCount !== undefined && funcCount > 0;
             const funcCountHtml = funcCount === undefined
                 ? '<span class="bsim-node-count" style="color:var(--dim);" title="Counting functions…">…</span>'
-                : funcCount > 0
-                    ? `<span class="bsim-node-count clickable" onclick="${escapeAttr(funcClick)}" onauxclick="${escapeAttr(funcClick)}" title="${escapeAttr(funcCount + ' function(s) tagged ' + n.id + (this.fvTagFuncCountsCapped ? ' (capped at 20000 functions scanned)' : '') + ' -- click to filter, ctrl/middle-click to open')}">${funcCount}${this.fvTagFuncCountsCapped ? '+' : ''}</span>`
+                : clickableCount
+                    ? `<span class="bsim-node-count clickable" onclick="event.stopPropagation(); ${escapeAttr(funcClick)}" onauxclick="event.stopPropagation(); ${escapeAttr(funcClick)}" title="${escapeAttr(funcCount + ' function(s) tagged ' + n.id + (this.fvTagFuncCountsCapped ? ' (capped at 20000 functions scanned)' : '') + ' -- click to filter, ctrl/middle-click to open')}">${funcCount}${this.fvTagFuncCountsCapped ? '+' : ''}</span>`
                     : '<span class="bsim-node-count" style="color:var(--dim);" title="No functions carry this tag">—</span>';
+            // Row click: a namespace/group toggles open like its caret; a
+            // leaf jumps straight to its functions, same as clicking its
+            // count, but only when it actually has any (a leaf with none has
+            // nothing to jump to).
+            const rowClick = hasKids
+                ? `FileView.toggleTagsTreeNode(${jsString(n.id)})`
+                : (clickableCount ? funcClick : '');
             out.push(`
-            <div class="bsim-node" style="padding-left:${8 + depth * 14}px;">
+            <div class="bsim-node" style="padding-left:${8 + depth * 14}px; ${rowClick ? 'cursor:pointer;' : ''}"${rowClick ? ` onclick="${escapeAttr(rowClick)}"` : ''}>
                 ${caret}
                 ${dot(n.id)}
                 <span class="bsim-node-label" style="flex:0 1 auto;">${escapeHtml(n.label)}</span>
@@ -1709,6 +1717,12 @@ window.FileView = {
         this.fvSelectedTag = id;
         const input = document.getElementById('flt-func-tag');
         if (input) input.value = id;
+        // The Functions tab's own sidebar tree is scoped to one axis at a
+        // time -- jump it to the tag's axis (fid: -> Library) so the tag
+        // just clicked is actually visible there, not hidden under whatever
+        // axis happened to be selected before.
+        const wantAxis = TagColor.axisOf(id.replace(/\*$/, ''));
+        if (this.fvAvailableAxes().includes(wantAxis)) this.fvAxis = wantAxis;
         this.switchTab('functions', false);
         this.fvRenderTree();
         this.applyFilters();
