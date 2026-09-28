@@ -203,8 +203,16 @@ def search_functions():
 
         def _paths_for_source(source_lvl, field):
             targets = INDEX_CONFIG.get(source_lvl, {}).get(field, [])
+            # ponytail: func-level tag filters must not fall back to a file-level
+            # join — that returns every function in a matching file, not just the
+            # one(s) actually carrying the tag.
+            levels = (
+                ["func"]
+                if source_lvl == "func" and field in ("tags", "user_tags")
+                else ["func", "file"]
+            )
             path = []
-            for lvl in ["func", "file"]:
+            for lvl in levels:
                 if lvl in targets:
                     path.append((lvl, resolve_target_field(source_lvl, lvl, field)))
             return [path] if path else []
