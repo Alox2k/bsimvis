@@ -7374,8 +7374,7 @@ def test_skip_modules_payload():
     test_lib_tag_rollup), so asserting on resulting tags would prove nothing.
     What can be checked without a live Ghidra/capa run is that the flag
     actually threads from the query string into the job payload the worker
-    will read -- and, since modules are opt-in, that the ones left unnamed come
-    back skipped rather than silently running.
+    will read -- and that unnamed modules follow the instance defaults.
     """
     print(_color(f"\n{'='*60}", CYAN))
     print(_color(" STEP 4d – enable=capa/rulezet reach the job payload", BOLD))
@@ -7384,6 +7383,10 @@ def test_skip_modules_payload():
     if not os.path.isfile(TEST_BINARY):
         print(_color("\n[SKIP] No test binary.", YELLOW))
         return
+
+    from bsimvis.app.services.config_service import config_service
+
+    default_modules = set(config_service.get("analysis_modules.enabled", []))
 
     with open(TEST_BINARY, "rb") as fh:
         # enqueue=false means this never reaches a worker, so the bytes never
@@ -7424,13 +7427,13 @@ def test_skip_modules_payload():
         f"payload: {payload}",
     )
     check(
-        "unnamed FunctionID stays skipped (modules are opt-in)",
-        payload.get("skip_function_id") is True,
+        "unnamed FunctionID follows the instance default",
+        payload.get("skip_function_id") is ("FunctionID" not in default_modules),
         f"payload: {payload}",
     )
     check(
-        "unnamed yara stays skipped (modules are opt-in)",
-        payload.get("skip_yara") is True,
+        "unnamed yara follows the instance default",
+        payload.get("skip_yara") is ("yara" not in default_modules),
         f"payload: {payload}",
     )
 
