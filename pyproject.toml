@@ -31,5 +31,5 @@ bsimvis-bench = "bsimvis.cli.bsimvis_bench:main"
 [tool.uv]
 package = true
 
-[tool.setuptools]
-packages = ["bsimvis"]
+[tool.setuptools.packages.find]
+include = ["bsimvis*"]
