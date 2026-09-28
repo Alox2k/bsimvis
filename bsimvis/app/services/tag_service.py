@@ -97,10 +97,24 @@ def _to_pool_ids(ids, lvl, pool_id):
 
 
 def _cluster_tag_field(entity_type, algo, node_type, meta):
-    if entity_type == "bin_cluster" and node_type == "container":
-        algo = f"{algo}:container"
     cluster_uuid = meta.get("cluster_uuid")
     return f"{entity_type}:{algo}:{cluster_uuid}" if cluster_uuid else None
+
+
+def _bin_cluster_namespace(collection, algo, node_type):
+    from bsimvis.app.services.config_service import config_service
+    from bsimvis.app.services.pool_service import pool_service
+
+    pool_id = get_pool_id(collection)
+    pool = pool_service.get_pool(pool_id) if pool_id else None
+    engine = (pool or {}).get("file_cluster_params", {}).get(
+        "cluster_algo"
+    ) or config_service.get("clustering.bin_engine", "hierarchical_snn")
+    if engine == "hierarchical_snn" and ":snn" not in algo:
+        algo = f"{algo}:snn"
+    if node_type == "container" and not algo.endswith(":container"):
+        algo = f"{algo}:container"
+    return algo, bool(pool_id and engine in ("hierarchical_uf", "hierarchical_snn"))
 
 
 def prune_non_vocabulary_tags(r, collection):
@@ -138,10 +152,13 @@ class TagService:
                 return f"global:pool:{pool_id}:cluster:{algo}:{entity_id}:meta"
             return f"{collection}:cluster:{algo}:{entity_id}:meta"
         if entity_type == "bin_cluster":
+            algo, collection_style_keys = _bin_cluster_namespace(
+                collection, algo, node_type
+            )
             if pool_id:
+                if collection_style_keys:
+                    return f"global:pool:{pool_id}:bin_cluster:{algo}:{entity_id}:meta"
                 return f"global:pool:{pool_id}:bin_cluster:{entity_id}:meta"
-            if node_type == "container":
-                algo = f"{algo}:container"
             return f"{collection}:bin_cluster:{algo}:{entity_id}:meta"
 
         collection = _normalize_collection(collection, entity_id)
@@ -249,6 +266,8 @@ class TagService:
 
             if is_cluster:
                 data = self._get_doc(doc_id)
+                if entity_type == "bin_cluster":
+                    algo, _ = _bin_cluster_namespace(collection, algo, node_type)
                 field = (
                     _cluster_tag_field(entity_type, algo, node_type, data)
                     if data
@@ -344,6 +363,8 @@ class TagService:
 
             if is_cluster:
                 data = self._get_doc(doc_id)
+                if entity_type == "bin_cluster":
+                    algo, _ = _bin_cluster_namespace(collection, algo, node_type)
                 field = (
                     _cluster_tag_field(entity_type, algo, node_type, data)
                     if data
@@ -756,8 +777,11 @@ class TagService:
                 list_key = f"{collection}:cluster:list:{algo}"
                 meta_prefix = f"{collection}:cluster:{algo}:"
             elif collection.startswith("global:pool:"):
-                list_key = f"{collection}:bin_cluster:list"
-                meta_prefix = f"{collection}:bin_cluster:"
+                _, collection_style_keys = _bin_cluster_namespace(
+                    collection, algo, "file"
+                )
+                list_key = f"{collection}:bin_cluster:list{':' + algo if collection_style_keys else ''}"
+                meta_prefix = f"{collection}:bin_cluster:{algo + ':' if collection_style_keys else ''}"
             else:
                 list_key = f"{collection}:bin_cluster:list:{algo}"
                 meta_prefix = f"{collection}:bin_cluster:{algo}:"

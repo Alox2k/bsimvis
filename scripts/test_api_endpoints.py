@@ -474,6 +474,7 @@ def resolve_ids():
 def test_cluster_tags():
     """Cluster tags persist once on cluster metadata and remain searchable."""
     from redis import Redis
+    from bsimvis.app.services.config_service import config_service
 
     print(_color(f"\n{'='*60}", CYAN))
     print(_color(" Cluster tags", BOLD))
@@ -485,6 +486,9 @@ def test_cluster_tags():
         decode_responses=True,
     )
     algo = "unweighted_cosine"
+    bin_engine = config_service.get("clustering.bin_engine", "hierarchical_snn")
+    bin_algo = f"{algo}:snn" if bin_engine == "hierarchical_snn" else algo
+    pool_bin_style = bin_engine in ("hierarchical_uf", "hierarchical_snn")
     pool_id = f"cluster_tags_{uuid.uuid4().hex[:8]}"
     tag = f"cluster-bookmark-{uuid.uuid4().hex[:8]}"
     fixtures = [
@@ -501,8 +505,8 @@ def test_cluster_tags():
             "collection": COLLECTION,
             "path": "/api/bin_cluster/list",
             "id": "tag-test-file",
-            "key": f"{COLLECTION}:bin_cluster:{algo}:tag-test-file:meta",
-            "list": f"{COLLECTION}:bin_cluster:list:{algo}",
+            "key": f"{COLLECTION}:bin_cluster:{bin_algo}:tag-test-file:meta",
+            "list": f"{COLLECTION}:bin_cluster:list:{bin_algo}",
         },
         {
             "type": "cluster",
@@ -518,8 +522,8 @@ def test_cluster_tags():
             "path": "/api/bin_cluster/list",
             "id": "tag-test-pool-file",
             "tag_id": "uuid-tag-test-pool-file",
-            "key": f"global:pool:{pool_id}:bin_cluster:uuid-tag-test-pool-file:meta",
-            "list": f"global:pool:{pool_id}:bin_cluster:list",
+            "key": f"global:pool:{pool_id}:bin_cluster:{bin_algo + ':' if pool_bin_style else ''}uuid-tag-test-pool-file:meta",
+            "list": f"global:pool:{pool_id}:bin_cluster:list{':' + bin_algo if pool_bin_style else ''}",
         },
     ]
 
