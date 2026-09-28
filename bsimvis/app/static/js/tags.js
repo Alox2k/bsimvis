@@ -10,6 +10,10 @@ if (typeof window.getCurrentCollection !== 'function') {
 let tagMetadata = {};
 window.tagMetadata = tagMetadata;
 
+// Overflow chip callbacks live here rather than inline in the onclick string,
+// since an onclick attribute can only reference something reachable by name.
+window._tagOverflowCallbacks = window._tagOverflowCallbacks || [];
+
 document.addEventListener('mousedown', (e) => {
     if (e.target.closest('.tag-overflow-chip')) return;
     document.querySelectorAll('.tag-overflow-dropdown.open').forEach(d => d.classList.remove('open'));
@@ -480,9 +484,15 @@ window.renderTagEditor = (etype, eid, tagsList, userTagsList, options = {}) => {
         const hidden = allTags.slice(maxTags);
         visibleHtml = shown.map(x => x.badge(x.t)).join('');
         const hiddenHtml = hidden.map(x => x.badge(x.t)).join('');
+        const chipOnClick = options.onOverflow
+            ? (() => {
+                const idx = window._tagOverflowCallbacks.push(options.onOverflow) - 1;
+                return `event.stopPropagation(); window._tagOverflowCallbacks[${idx}]();`;
+            })()
+            : `event.stopPropagation(); this.nextElementSibling.classList.toggle('open');`;
         overflowHtml = `
         <span class="tag-overflow-wrap" style="position:relative; display:inline-flex;">
-            <span class="tag-overflow-chip" onclick="event.stopPropagation(); this.nextElementSibling.classList.toggle('open');">+${hidden.length}</span>
+            <span class="tag-overflow-chip" onclick="${escapeAttr(chipOnClick)}">+${hidden.length}</span>
             <div class="tag-overflow-dropdown" onclick="event.stopPropagation();">${hiddenHtml}</div>
         </span>`;
     } else {
@@ -1100,7 +1110,7 @@ async function toggleIgnore(event, id1, id2, algo) {
     }
 }
 
-async function startAddTag(event, etype, eid) {
+async function startAddTag(event, etype, eid, prefill = '', onAdded = null) {
     event.stopPropagation();
     const btn = event.target;
     const parent = btn.parentElement;
@@ -1113,6 +1123,7 @@ async function startAddTag(event, etype, eid) {
     input.type = 'text';
     input.className = 'tag-input-field';
     input.placeholder = 'Tag...';
+    if (prefill) input.value = prefill;
 
     wrapper.appendChild(input);
     parent.replaceChild(wrapper, btn);
@@ -1120,6 +1131,7 @@ async function startAddTag(event, etype, eid) {
     attachTagAutocomplete(input, async (tag) => {
         await confirmAddTag(etype, eid, tag, parent);
         cleanup();
+        if (onAdded) onAdded(tag);
     });
     input.focus();
 
@@ -1140,7 +1152,10 @@ async function startAddTag(event, etype, eid) {
     input.onkeyup = async (e) => {
         if (e.key === 'Enter') {
             const tag = input.value.trim();
-            if (tag) await confirmAddTag(etype, eid, tag, parent);
+            if (tag) {
+                await confirmAddTag(etype, eid, tag, parent);
+                if (onAdded) onAdded(tag);
+            }
             cleanup();
         } else if (e.key === 'Escape') {
             cleanup();

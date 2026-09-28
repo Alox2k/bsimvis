@@ -37,6 +37,8 @@ window.FileView = {
         this.metadataOverlay = false;
         this.metadataThreshold = 70;
         this.activeTab = "metadata";
+        this.fvTagsAxis = '';
+        this.fvTagsOpen = new Set();
 
         const collection = params.collection || '';
         const file_md5 = params.md5 || params.file_md5;
@@ -140,6 +142,7 @@ window.FileView = {
                     <button class="bsim-tab" id="file-tab-btn-files" onclick="FileView.switchTab('files')" style="display: none;">Files</button>
                     <button class="bsim-tab active" id="file-tab-btn-metadata" onclick="FileView.switchTab('metadata')">Metadata (<span id="metadata-count">0</span>)</button>
                     <button class="bsim-tab" id="file-tab-btn-inferred" onclick="FileView.switchTab('inferred')" style="display:none;">Inferred Metadata (<span id="inferred-count">0</span>)</button>
+                    <button class="bsim-tab" id="file-tab-btn-tags" onclick="FileView.switchTab('tags')">Tags</button>
                     <button class="bsim-tab" id="file-tab-btn-functions" onclick="FileView.switchTab('functions')">Functions (<span id="functions-count">0</span>)</button>
                     <button class="bsim-tab" id="file-tab-btn-clusters" onclick="FileView.switchTab('clusters')">Clusters (<span id="cluster-count">0</span>)</button>
                     <button class="bsim-tab" id="file-tab-btn-extracted_from" onclick="FileView.switchTab('extracted_from')" style="display: none;">Extracted From</button>
@@ -177,6 +180,20 @@ window.FileView = {
                             <i class="fa-solid fa-wand-magic-sparkles"></i> Inferred Metadata
                         </div>
                         <div id="inferred-meta" style="display:flex; flex-direction:column; gap:10px; font-size:0.85rem;"></div>
+                    </div>
+                </div>
+
+                <!-- Tags Tab Panel -->
+                <div id="file-panel-tags" class="file-view-panel" style="display: none;">
+                    <div id="fv-tags-sidebar" style="border:1px solid var(--border); border-radius:8px; background:var(--card-bg); padding:10px 0;">
+                        <div class="bsim-side-title">
+                            File tags
+                            <span class="bsim-side-actions">
+                                <span onclick="FileView.startAddFileTag(event)" title="Add a tag">add</span>
+                            </span>
+                        </div>
+                        <div id="fv-tags-axis-pick" class="bsim-axis-pick"></div>
+                        <div id="fv-tags-tree" class="bsim-tree"></div>
                     </div>
                 </div>
 
@@ -388,7 +405,8 @@ window.FileView = {
             // Render Tags and Notes in Header (Inspired by File Strip in Sim view)
             if (window.renderTagEditor) {
                 document.getElementById('file-tags-container').innerHTML = window.renderTagEditor(
-                    'file', file.file_id || fileId, file.tags || [], file.user_tags || []
+                    'file', file.file_id || fileId, file.tags || [], file.user_tags || [],
+                    { maxTags: 3, onOverflow: () => FileView.switchTab('tags') }
                 );
             }
             document.getElementById('file-actions-container').innerHTML = `
@@ -862,6 +880,9 @@ window.FileView = {
         if (tabId === 'neighbors') {
             this.loadNeighborsPanel();
         }
+        if (tabId === 'tags') {
+            this.renderFileTagsTab();
+        }
 
         if (push && location.hash.slice(1) !== tabId) {
             history.pushState(null, '', location.pathname + location.search + '#' + tabId);
@@ -869,7 +890,7 @@ window.FileView = {
     },
 
     applyTabFromHash() {
-        const allowedTabs = ['metadata', 'inferred', 'functions', 'clusters', 'extracted_from', 'files', 'neighbors'];
+        const allowedTabs = ['metadata', 'inferred', 'tags', 'functions', 'clusters', 'extracted_from', 'files', 'neighbors'];
         let tab = location.hash.slice(1);
 
         const hasChildren = this.file && (this.file.child_count > 0 || this.file.is_container);
@@ -1444,46 +1465,148 @@ window.FileView = {
         return counts;
     },
 
-    // One trie over the tag ids, the same shape Bin Sim's tree has: a node id is
-    // a real tag id and a literal prefix of everything beneath it, depth is
-    // whatever the ids have, and a detail tail is never a level -- so the
-    // function a library was matched on cannot become a category of its own.
-    //
-    // This used to read `fileSimTagParts`, which flattened every id to
-    // name/version and could only ever draw two levels.
+    // The axes this file actually carries mass on, named the way Bin Sim names
+    // them. The namespace -> axis map comes from `/api/tags/colors`, so both
+    // views put a tag on the same axis instead of each keeping its own table.
+    fvAvailableAxes() {
+        return TagTree.axes(Object.keys(this.fvTagCounts()));
+    },
+
+    // One trie over the tag ids, built by the same code Bin Sim's pairwise
+    // tree uses for its own nesting (`TagTree`): a node id is a real tag id
+    // and a literal prefix of everything beneath it, depth is whatever the
+    // ids have, and a detail tail is never a level. `this.fvAxis === ''` is
+    // the "all axes" mode -- every namespace the file's functions carry shows
+    // up as its own top-level group instead of picking one axis to view.
     fvTree() {
-        const counts = this.fvTagCounts();
-        const root = { children: new Map() };
+        return TagTree.build(Object.entries(this.fvTagCounts()), this.fvAxis);
+    },
 
-        Object.entries(counts).forEach(([tagId, count]) => {
-            let node = root;
-            TagColor.chain(tagId).forEach(prefix => {
-                let next = node.children.get(prefix);
-                if (!next) {
-                    const segs = TagColor.levels(prefix).segs;
-                    next = {
-                        id: prefix, prefix,
-                        label: segs[segs.length - 1] || prefix,
-                        count: 0, children: new Map(),
-                    };
-                    node.children.set(prefix, next);
-                }
-                next.count += count;
-                node = next;
-            });
-        });
+    // --- Tags tab: same hierarchy tree as the function sidebar, sourced from
+    // the file's own tag list instead of aggregating across functions. A
+    // file's tags are already complete -- no paging, no fvTagIndex needed.
+    fvTagsAvailableAxes() {
+        return TagTree.axes((this.file && this.file.tags) || []);
+    },
 
-        const finish = (node) => {
-            const kids = [...node.children.values()].map(finish);
-            kids.sort((a, b) => b.count - a.count);
-            node.children = kids;
-            return node;
+    fvTagsTree() {
+        const counts = {};
+        ((this.file && this.file.tags) || []).forEach(t => { counts[t] = (counts[t] || 0) + 1; });
+        return TagTree.build(Object.entries(counts), this.fvTagsAxis);
+    },
+
+    fvTagsRenderAxisPicker() {
+        const host = document.getElementById('fv-tags-axis-pick');
+        if (!host) return;
+        const avail = this.fvTagsAvailableAxes();
+        // '' ("all axes") is always a valid selection -- only a stale named
+        // axis needs a fallback.
+        if (this.fvTagsAxis && !avail.includes(this.fvTagsAxis)) this.fvTagsAxis = '';
+        host.innerHTML = !avail.length ? '' : `
+            <div class="view-toggle" style="margin:0; flex:1; min-width:0;">
+                <span class="bsim-ctl-label" style="margin:4px 6px;">Axis:</span>
+                <select class="view-btn" style="flex:1; min-width:0;" onchange="FileView.setTagsTreeAxis(this.value)">
+                    <option value=""${this.fvTagsAxis === '' ? ' selected' : ''}>All axes</option>
+                    ${avail.map(a => `<option value="${escapeAttr(a)}"${a === this.fvTagsAxis ? ' selected' : ''}>${escapeHtml(a)}</option>`).join('')}
+                </select>
+            </div>`;
+    },
+
+    fvTagsRenderTree() {
+        const host = document.getElementById('fv-tags-tree');
+        if (!host) return;
+        const nodes = this.fvTagsTree();
+        if (!nodes.length) {
+            host.innerHTML = '<div style="color:var(--dim); padding:10px 12px; font-size:0.78rem;">No tags yet.</div>';
+            return;
+        }
+        const dot = (id) => (typeof TagColor !== 'undefined')
+            ? `<span class="bsim-node-dot" style="background:${TagColor.forTag(id)};"></span>` : '';
+        const out = [];
+        const walk = (n, depth) => {
+            const hasKids = n.children.length > 0;
+            const open = this.fvTagsOpen.has(n.id);
+            const caret = hasKids
+                ? `<span class="bsim-caret" onclick="event.stopPropagation(); FileView.toggleTagsTreeNode(${escapeAttr(jsString(n.id))})">${open ? '▾' : '▸'}</span>`
+                : '<span class="bsim-caret"></span>';
+            const removeClick = `FileView.removeTagInTree(event, ${jsString(n.id)})`;
+            const addClick = `FileView.addTagInTree(event, ${jsString(n.id + ':')})`;
+            out.push(`
+            <div class="bsim-node" style="padding-left:${8 + depth * 14}px;">
+                ${caret}
+                ${dot(n.id)}
+                <span class="bsim-node-label">${escapeHtml(n.label)}</span>
+                <span class="bsim-node-count">${n.count}</span>
+                <span class="bsim-side-actions">
+                    <span onclick="${escapeAttr(addClick)}" title="Add a tag under ${escapeAttr(n.id)}">+</span>
+                    ${n.count && !hasKids ? `<span onclick="${escapeAttr(removeClick)}" title="Remove ${escapeAttr(n.id)}">×</span>` : ''}
+                </span>
+            </div>`);
+            if (open) n.children.forEach(c => walk(c, depth + 1));
         };
-        let nodes = finish(root).children;
-        // The picker already names the namespace, so a lone top node repeats it.
-        // One level only, matching Bin Sim.
-        if (nodes.length === 1 && nodes[0].children.length) nodes = nodes[0].children;
-        return nodes;
+        nodes.forEach(n => walk(n, 0));
+        host.innerHTML = out.join('');
+    },
+
+    renderFileTagsTab() {
+        this.fvTagsOpen = this.fvTagsOpen || new Set();
+        this.fvTagsRenderAxisPicker();
+        this.fvTagsRenderTree();
+    },
+
+    setTagsTreeAxis(axis) {
+        this.fvTagsAxis = axis;
+        this.renderFileTagsTab();
+    },
+
+    toggleTagsTreeNode(id) {
+        if (this.fvTagsOpen.has(id)) this.fvTagsOpen.delete(id);
+        else this.fvTagsOpen.add(id);
+        this.fvTagsRenderTree();
+    },
+
+    startAddFileTag(event) {
+        startAddTag(event, 'file', this.file.file_id || this.params.md5 || this.params.file_md5, '',
+            () => this.reloadOnTagChange());
+    },
+
+    // Adding/removing from the tree hits the same file-entity endpoints the
+    // hero card uses, but the tree isn't inside a `[data-etype][data-eid]`
+    // editor `updateUIForTagAdd`/`updateUIForTagRemove` can find, so it
+    // reloads the whole file (cheap -- one detail fetch) to stay in sync with
+    // the hero card and re-derive the tree from the fresh tag list.
+    addTagInTree(event, prefill) {
+        startAddTag(event, 'file', this.file.file_id || this.params.md5 || this.params.file_md5, prefill,
+            () => this.reloadOnTagChange());
+    },
+
+    async removeTagInTree(event, tag) {
+        await removeTag(event, 'file', this.file.file_id || this.params.md5 || this.params.file_md5, tag);
+        await this.reloadOnTagChange();
+    },
+
+    async reloadOnTagChange() {
+        await this.init(this.params, this.container.id);
+        this.switchTab('tags', false);
+    },
+
+    fvRenderAxisPicker() {
+        const host = document.getElementById('fv-axis-pick');
+        if (!host) return;
+        const avail = this.fvAvailableAxes();
+        // '' ("all axes") is always a valid selection -- only a stale named
+        // axis needs a fallback.
+        if (this.fvAxis && !avail.includes(this.fvAxis)) this.fvAxis = '';
+        // Always shown -- every axis this file has tags on stays pickable
+        // regardless of the current tag scope, not just while >1 exists.
+        host.innerHTML = !avail.length ? '' : `
+            <div class="view-toggle" style="margin:0; flex:1; min-width:0;">
+                <span class="bsim-ctl-label" style="margin:4px 6px;">Axis:</span>
+                <select class="view-btn" style="flex:1; min-width:0;" onchange="FileView.setTreeAxis(this.value)">
+                    <option value=""${this.fvAxis === '' ? ' selected' : ''}>All axes</option>
+                    ${avail.map(a => `<option value="${escapeAttr(a)}"${a === this.fvAxis ? ' selected' : ''}>${escapeHtml(a)}</option>`).join('')}
+                </select>
+            </div>`;
     },
 
     fvRenderTree() {
