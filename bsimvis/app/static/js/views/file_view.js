@@ -1434,8 +1434,19 @@ window.FileView = {
         const file_md5 = this.params.md5 || this.params.file_md5;
         const apiParams = (window.getApiParams || window.parent.getApiParams)(collection);
         const counts = {};
+        // Distinct-function count per tag ancestor id, for the Tags tab's
+        // function-count column: crosses each inherited file tag (which is
+        // itself a folded-up ancestor of some function tag, see
+        // origin_parent in tag_taxonomy.py) against the functions that carry
+        // it. `TagColor.chain` mirrors the backend's ancestor-bucket rule, so
+        // a node id here is the same string the search index buckets a
+        // function's tags under -- one function can count once per ancestor
+        // even if several of its own tags share that ancestor (e.g. two
+        // `yara:*` hits both counting once under `yara`).
+        const funcCounts = {};
         let offset = 0;
         const PAGE = 500, CAP = 20000;
+        let capped = false;
         try {
             while (offset < CAP) {
                 const p = new URLSearchParams(apiParams);
@@ -1449,15 +1460,39 @@ window.FileView = {
                 const res = await fetch(`/api/function/search?${p.toString()}`);
                 if (!res.ok) break;
                 const data = await res.json();
-                (data.functions || []).forEach(f => (f.tags || []).forEach(t => { counts[t] = (counts[t] || 0) + 1; }));
+                (data.functions || []).forEach(f => {
+                    const ancestors = new Set();
+                    (f.tags || []).forEach(t => {
+                        counts[t] = (counts[t] || 0) + 1;
+                        TagColor.chain(t).forEach(id => ancestors.add(id));
+                    });
+                    ancestors.forEach(id => { funcCounts[id] = (funcCounts[id] || 0) + 1; });
+                });
                 offset += PAGE;
                 if (!data.functions || data.functions.length < PAGE || offset >= (data.total || 0)) break;
+                if (offset >= CAP) capped = true;
             }
         } catch (e) {
             console.error('tag index load failed', e);
         }
         this.fvTagIndex = counts;
+        this.fvTagFuncCounts = funcCounts;
+        // ponytail: functions past the 20k-per-file cap above never get
+        // counted; the column marks a capped file with a trailing "+"
+        // instead of pretending the number is exact. Add a real per-file
+        // tag-facet endpoint if that cap starts mattering.
+        this.fvTagFuncCountsCapped = capped;
         this.renderTagTree();
+        if (this.activeTab === 'tags') this.fvTagsRenderTree();
+    },
+
+    // Function count for a Tags-tab node id, sourced from fvTagFuncCounts
+    // (built alongside the existing fvTagIndex pass). `undefined` means the
+    // index hasn't landed yet -- callers show a loading placeholder instead
+    // of a false zero.
+    fvTagFuncCountFor(id) {
+        if (!this.fvTagFuncCounts) return undefined;
+        return this.fvTagFuncCounts[id] || 0;
     },
 
     fvTagCounts() {
@@ -1592,6 +1627,20 @@ window.FileView = {
                     : `<span class="analysis-tag-badge" style="cursor:pointer; border-color:${tagAlpha(color, 40)}; color:${color}; background:${tagAlpha(color, 7)};" data-eid="${escapeAttr(eid)}"
                             title="Analysis Tag: ${escapeAttr(fullId)} (click for source)">${escapeHtml(fullId)}</span>`;
             }
+            const funcCount = this.fvTagFuncCountFor(n.id);
+            const funcClick = `FileView.openTagFunctions(event, ${jsString(n.id)})`;
+            // Distinct-function count crossing this (inherited) file tag
+            // against the functions that actually carry it -- an
+            // `origin_parent`-folded tag like `fid:libc` or `boilerplate:runtime`
+            // counts every function whose own tag has it as an ancestor
+            // (tag_ancestors in index_config.py), same rule the search index
+            // buckets functions under. Click filters the Functions tab to it;
+            // ctrl/middle-click opens the full function search in a new tab.
+            const funcCountHtml = funcCount === undefined
+                ? '<span class="bsim-node-count" style="color:var(--dim);" title="Counting functions…">…</span>'
+                : funcCount > 0
+                    ? `<span class="bsim-node-count" style="cursor:pointer;" onclick="${escapeAttr(funcClick)}" onauxclick="${escapeAttr(funcClick)}" title="${escapeAttr(funcCount + ' function(s) tagged ' + n.id + (this.fvTagFuncCountsCapped ? ' (capped at 20000 functions scanned)' : '') + ' -- click to filter, ctrl/middle-click to open')}">${funcCount}${this.fvTagFuncCountsCapped ? '+' : ''}</span>`
+                    : '<span class="bsim-node-count" style="color:var(--dim);" title="No functions carry this tag">—</span>';
             out.push(`
             <div class="bsim-node" style="padding-left:${8 + depth * 14}px;">
                 ${caret}
@@ -1599,7 +1648,7 @@ window.FileView = {
                 <span class="bsim-node-label" style="flex:0 1 auto;">${escapeHtml(n.label)}</span>
                 ${fullBadge}
                 <span style="margin-left:auto; display:flex; align-items:center; gap:4px; flex-shrink:0;">
-                    <span class="bsim-node-count">${n.count}</span>
+                    ${funcCountHtml}
                     <button class="add-tag-btn" onclick="${escapeAttr(addClick)}" title="Add a tag under ${escapeAttr(n.id)}">+</button>
                     ${n.count && !hasKids ? `<span class="remove-tag-btn" onclick="${escapeAttr(removeClick)}" style="background:var(--hover);" title="Remove ${escapeAttr(n.id)}">×</span>` : ''}
                 </span>
@@ -1624,6 +1673,34 @@ window.FileView = {
     setTagsQuery(q) {
         this.fvTagsQuery = q;
         this.fvTagsRenderTree();
+    },
+
+    // Plain click: scope the Functions tab to this tag in place. Ctrl/meta or
+    // middle-click (button 1, `auxclick`): open the full function search in a
+    // new tab instead, same as the rest of the app's open-vs-navigate
+    // convention. Filters on the exact node id, not a `*` glob -- the search
+    // index already buckets a function under every tag ancestor (see the
+    // comment on fvTagFuncCounts), so the exact id already matches
+    // `fid:libc:2.31#memcpy` under `fid:libc` without a glob's risk of also
+    // catching a sibling like `fid:libcrypto`.
+    openTagFunctions(event, id) {
+        if (event) event.stopPropagation();
+        const file_md5 = this.params.md5 || this.params.file_md5;
+        if (event && (event.ctrlKey || event.metaKey || event.button === 1)) {
+            const collection = this.params.collection || '';
+            const isContainer = this.file && this.file.is_container;
+            const md5Param = isContainer ? (this.file.root_md5 ? 'md5' : 'root_md5') : 'file_md5';
+            const url = Nav.buildUIUrl(collection, ['search', 'functions'])
+                + `?${md5Param}=${encodeURIComponent(file_md5)}&func_tag=${encodeURIComponent(id)}`;
+            Nav.openPath(url, event, { title: 'Functions', type: 'functions' });
+            return;
+        }
+        this.fvSelectedTag = id;
+        const input = document.getElementById('flt-func-tag');
+        if (input) input.value = id;
+        this.switchTab('functions', false);
+        this.fvRenderTree();
+        this.applyFilters();
     },
 
     toggleTagsTreeNode(id) {
