@@ -529,8 +529,10 @@ def canonical_tag_id(tag_id):
     Everything else survives untouched. A source's own punctuation is data --
     `2.31`, `libstdc++`, `System.Net.Http` and `t1027.005` all keep their dots,
     and whether a dot is a level is `TAG_SEPARATORS`' business, not this one's.
-    A bare word becomes a `user:` tag: it came from a human, and an
-    unnamespaced id must not silently land on an analysis axis.
+    A bare word stays bare -- `upx` stores as `upx`, not `user:upx`. It still
+    lands on the `user` axis (`TAG_AXES` has no entry for it, so `axisOf` falls
+    to `DEFAULT_AXIS`), so an unrecognised tag can't silently pass as an
+    analysis one; only the id text itself no longer carries a prefix to prove it.
     """
     raw = " ".join(str(tag_id or "").split()).replace('"', "")
     if not raw:
@@ -539,8 +541,7 @@ def canonical_tag_id(tag_id):
     body = ":".join(p for p in body.split(":") if p)
     if not body:
         return ""
-    out = body if ":" in body else f"user:{body}"
-    out = out.replace(" ", "-").lower()
+    out = body.replace(" ", "-").lower()
     return f"{out}{TAG_DETAIL}{detail.replace(' ', '-')}" if detail else out
 
 
@@ -566,9 +567,10 @@ def tag_levels(tag_id):
     """`(namespace, levels, detail)` for a tag id.
 
     `levels` excludes the namespace, so `category:network:c2` yields
-    `("category", ["network", "c2"], "")`. Nothing here namespaces a bare tag --
-    callers that want `mytag` read as `user:mytag` apply `namespaced()` first,
-    because the index must keep bucketing the literal value it was handed.
+    `("category", ["network", "c2"], "")`. A bare tag has no namespace to
+    strip, so it comes back as its own namespace with no levels beneath it --
+    `mytag` -> `("mytag", [], "")` -- which is also why it hashes to no colour
+    in `tag_style`.
     """
     body, detail = tag_body(tag_id)
     ns = body.split(":", 1)[0]
@@ -616,8 +618,15 @@ def tag_style(tag_id):
     Hue in degrees, tone indexing the S/L pairs, step how far the shade is
     lightened past the tag's own colour. `hue` is None for an id with nothing to
     hash (a bare namespace), which the UI draws grey.
+
+    A bare word (no colon) is hashed as if it were `user:<word>` -- purely for
+    this computation, mirroring `tag_color.js`'s own local fallback -- so an
+    unnamespaced tag still gets a real hue instead of reading as "nothing to
+    hash". The stored id itself is never rewritten; only `namespaced()`'s
+    callers used to conflate the two.
     """
-    ns, rest, _detail = tag_levels(namespaced(tag_id))
+    raw = str(tag_id)
+    ns, rest, _detail = tag_levels(raw if ":" in raw else f"user:{raw}")
     segs = [ns] + rest
     if not rest:
         return None, 0, 0
@@ -687,16 +696,19 @@ def default_priority_for_tag(tag_id):
 
 
 def namespaced(tag_id):
-    """A tag id with a namespace guaranteed: bare `mytag` -> `user:mytag`.
+    """A tag id, stripped -- kept as its own function because call sites treat
+    "did this tag already carry a namespace" as a meaningful question even
+    though nothing about the stored id itself marks the answer any more.
 
-    A colon is the whole test. A closed list of known namespaces would have to
-    grow every time the routing config names a new source taxonomy, and an
-    unlisted one would be buried under `user:` instead -- which is the bug that
-    put `runtime-packer:pe:upx` on the user axis. `migrate_tag` splits the same
-    way, so the two cannot disagree about what is already namespaced.
+    There used to be a second half here: a bare `mytag` became `user:mytag`,
+    so an LLM- or human-written word with no recognised namespace couldn't
+    silently land on an analysis axis. That guarantee is unchanged -- `axisOf`
+    still routes anything outside `TAG_AXES` to `DEFAULT_AXIS` -- it just no
+    longer needs the id itself rewritten to prove it, which is what put
+    nonsense like `user:upx` and `user:container` in front of an analyst who
+    never typed `user:` anything.
     """
-    raw = str(tag_id).strip()
-    return raw if ":" in raw else f"user:{raw}"
+    return str(tag_id).strip()
 
 
 def origin_tag(kind, name, version=None, func=None, detector="fid"):
@@ -1306,9 +1318,9 @@ def migrate_tag(tag_id):
     file-scope `container:`/`packer:` namespaces).
 
     A legacy `flag:`/`llm:` tag yields up to two ids: its severity and its
-    category. Anything unrecognised is treated as human-typed and moved to
-    `user:`, because an unnamespaced tag must not keep silently landing on an
-    analysis axis.
+    category. Anything unrecognised passes through as-is -- it still lands on
+    the `user` axis via `DEFAULT_AXIS`, just without a `user:` prefix rewritten
+    into the id.
     """
     raw = str(tag_id).strip()
     if not raw:
@@ -1350,7 +1362,7 @@ def migrate_tag(tag_id):
         for cap in rest:
             if cap in LEGACY_CAPABILITY:
                 out.append(category_tag(*LEGACY_CAPABILITY[cap]))
-        return out or [f"user:{raw}"]
+        return out or [raw]
 
     if head in ORIGIN_KINDS:
         return [migrate_origin(raw)]
@@ -1373,7 +1385,7 @@ def migrate_tag(tag_id):
     if len(parts) > 1:
         return [raw]
 
-    return [f"user:{raw}"]
+    return [raw]
 
 
 def migrate_origin(tag_id):
@@ -1462,18 +1474,19 @@ def demo():
     assert migrate_tag("flag:crypto") == ["category:crypto:cipher"]
     # Unknown capability behind a known prefix must not vanish silently.
     assert migrate_tag("flag:suspicious:invented") == ["severity:medium"]
-    assert migrate_tag("flag:nonsense") == ["user:flag:nonsense"]
+    assert migrate_tag("flag:nonsense") == ["flag:nonsense"]
     # Double-prefixed by the old writer disagreement.
     assert migrate_tag("flag:llm:benign:init") == [
         "severity:none",
         "category:util:init",
     ]
-    # ... and the same id after `namespaced()` buried it under `user:`.
+    # ... and the same id after `namespaced()` buried it under `user:` -- an
+    # already-stored legacy id, so `user:` is still recognised on the way in.
     assert migrate_tag("user:flag:llm:benign:init") == [
         "severity:none",
         "category:util:init",
     ]
-    assert migrate_tag("user:flag:nonsense") == ["user:flag:nonsense"]
+    assert migrate_tag("user:flag:nonsense") == ["flag:nonsense"]
 
     assert migrate_tag("lib:libc:2.31:memcpy") == ["origin:lib:libc:2.31:memcpy"]
     assert migrate_tag("lib:uclibc") == ["origin:lib:uclibc:unknown"]
@@ -1489,8 +1502,8 @@ def demo():
     # Already migrated -> idempotent, so a re-run is safe.
     for t in ("origin:lib:libc:2.31", "severity:high", "category:network:c2", "user:x"):
         assert migrate_tag(t) == [t], t
-    # Human-typed, no namespace.
-    assert migrate_tag("mirai") == ["user:mirai"]
+    # Human-typed, no namespace -- stays bare, still lands on the user axis.
+    assert migrate_tag("mirai") == ["mirai"]
     # The old `rulezet:` catch-all comes off, and the source taxonomy it hid
     # becomes the namespace -- the tag id `route_source_tag` writes today.
     assert migrate_tag("rulezet:ms-caro-malware-full:malware-platform:linux") == [
@@ -1552,7 +1565,7 @@ def demo():
         "misp-galaxy:tool=cobalt-strike"
     )
     assert canonical_tag_id("a::b") == "a:b", "an empty level is not a level"
-    assert canonical_tag_id("mirai") == "user:mirai"
+    assert canonical_tag_id("mirai") == "mirai"
     assert canonical_tag_id("mitre:T1027.005") == "mitre:t1027.005", "a dot is data"
     assert canonical_tag_id("fid:openssl:3.0.2#EVP_EncryptInit") == (
         "fid:openssl:3.0.2#EVP_EncryptInit"
@@ -1585,7 +1598,7 @@ def demo():
     assert not tag_in_scope("fid:musl:1.2#x", "fid:uclibc")
     assert not tag_in_scope("", "fid:uclibc")
 
-    assert namespaced("mytag") == "user:mytag"
+    assert namespaced("mytag") == "mytag"
     assert namespaced("category:network:c2") == "category:network:c2"
 
     # capa ids are recorded verbatim, never remapped into `category:`.
