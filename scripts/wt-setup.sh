@@ -39,6 +39,19 @@ if [ ! -L bin ] || [ "$(readlink -f bin)" != "$MAIN_ROOT/bin" ]; then
   ln -s "$MAIN_ROOT/bin" bin
 fi
 
+# --- 1a. vendor/ symlink -> main repo (offline frontend libs; fetched, not built) --
+VENDOR_DIR=bsimvis/app/static/vendor
+MAIN_VENDOR="$MAIN_ROOT/$VENDOR_DIR"
+if [ ! -d "$MAIN_VENDOR" ]; then
+  echo "Fetching vendor assets in main repo"
+  (cd "$MAIN_ROOT" && ./scripts/fetch_vendor_assets.sh)
+fi
+if [ ! -L "$VENDOR_DIR" ] || [ "$(readlink -f "$VENDOR_DIR")" != "$MAIN_VENDOR" ]; then
+  echo "Linking $VENDOR_DIR -> $MAIN_VENDOR"
+  rm -rf "$VENDOR_DIR"
+  ln -s "$MAIN_VENDOR" "$VENDOR_DIR"
+fi
+
 # --- 1b. config from the example (the upload CLI hard-fails without it) -----
 if [ ! -f bsimvis_config.toml ] && [ -f bsimvis_config.toml.example ]; then
   echo "Seeding bsimvis_config.toml from the example"
