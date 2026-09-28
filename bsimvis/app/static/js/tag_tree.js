@@ -39,11 +39,16 @@ const TagTree = (() => {
                         id: prefix, prefix,
                         label: isAxisHead ? a : (segs[segs.length - 1] || prefix),
                         axisHead: isAxisHead,
-                        count: 0, children: new Map(),
+                        count: 0, children: new Map(), tagIds: [],
                     };
                     node.children.set(prefix, next);
                 }
                 next.count += count;
+                // The original id(s) that reached this node -- a leaf's own id
+                // (`groupId`) has its detail tail stripped, so a caller that
+                // needs the exact stored tag (a provenance lookup, a full-text
+                // display) reads it from here rather than from `id`.
+                next.tagIds.push(tagId);
                 node = next;
             });
         });

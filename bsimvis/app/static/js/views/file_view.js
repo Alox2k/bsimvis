@@ -34,6 +34,7 @@ window.FileView = {
         this.fvTagIndex = null;
         this.fvTagsAxis = '';
         this.fvTagsOpen = new Set();
+        this.fvTagsQuery = '';
 
         const collection = params.collection || '';
         const file_md5 = params.md5 || params.file_md5;
@@ -189,6 +190,9 @@ window.FileView = {
                             <span class="bsim-side-actions">
                                 <span onclick="FileView.startAddFileTag(event)" title="Add a tag">add</span>
                             </span>
+                        </div>
+                        <div style="padding:0 12px 8px;">
+                            <input type="text" id="fv-tags-search" placeholder="Search tags..." style="width:100%; box-sizing:border-box; font-size:0.78rem;" oninput="FileView.setTagsQuery(this.value)">
                         </div>
                         <div id="fv-tags-axis-pick" class="bsim-axis-pick"></div>
                         <div id="fv-tags-tree" class="bsim-tree"></div>
@@ -1317,16 +1321,44 @@ window.FileView = {
     },
 
     // --- Tags tab: same hierarchy tree as the function sidebar, sourced from
-    // the file's own tag list instead of aggregating across functions. A
+    // the file's own tag lists instead of aggregating across functions. A
     // file's tags are already complete -- no paging, no fvTagIndex needed.
+    // Both lists feed the tree -- analysis tags (`file.tags`) and user tags
+    // (`file.user_tags`, minus the special bookmark/ignore markers) -- since
+    // the hero card's overflow chip counts both and this tab is where it goes.
+    fvTagsUserSet() {
+        return new Set(((this.file && this.file.user_tags) || []).filter(t => t !== 'bookmark' && t !== 'ignore'));
+    },
+
+    fvTagsAllIds() {
+        const analysis = (this.file && this.file.tags) || [];
+        return analysis.concat([...this.fvTagsUserSet()]);
+    },
+
     fvTagsAvailableAxes() {
-        return TagTree.axes((this.file && this.file.tags) || []);
+        return TagTree.axes(this.fvTagsAllIds());
     },
 
     fvTagsTree() {
         const counts = {};
-        ((this.file && this.file.tags) || []).forEach(t => { counts[t] = (counts[t] || 0) + 1; });
+        this.fvTagsAllIds().forEach(t => { counts[t] = (counts[t] || 0) + 1; });
         return TagTree.build(Object.entries(counts), this.fvTagsAxis);
+    },
+
+    // Keeps only nodes whose label or full tag id matches, plus every
+    // ancestor of a match (so a hit is never hidden inside a collapsed
+    // group). `null` means "no query" -- callers should skip filtering
+    // entirely rather than call this with an empty string every render.
+    fvTagsFilterTree(nodes, query) {
+        const q = query.toLowerCase();
+        const walk = (n) => {
+            const selfMatch = n.label.toLowerCase().includes(q)
+                || (n.tagIds || []).some(t => t.toLowerCase().includes(q));
+            const kids = n.children.map(walk).filter(Boolean);
+            if (!selfMatch && !kids.length) return null;
+            return Object.assign({}, n, { children: kids });
+        };
+        return nodes.map(walk).filter(Boolean);
     },
 
     fvTagsRenderAxisPicker() {
@@ -1349,28 +1381,50 @@ window.FileView = {
     fvTagsRenderTree() {
         const host = document.getElementById('fv-tags-tree');
         if (!host) return;
-        const nodes = this.fvTagsTree();
+        let nodes = this.fvTagsTree();
+        const query = (this.fvTagsQuery || '').trim();
+        if (query) nodes = this.fvTagsFilterTree(nodes, query);
         if (!nodes.length) {
-            host.innerHTML = '<div style="color:var(--dim); padding:10px 12px; font-size:0.78rem;">No tags yet.</div>';
+            host.innerHTML = `<div style="color:var(--dim); padding:10px 12px; font-size:0.78rem;">${query ? 'No tags match.' : 'No tags yet.'}</div>`;
             return;
         }
         const dot = (id) => (typeof TagColor !== 'undefined')
             ? `<span class="bsim-node-dot" style="background:${TagColor.forTag(id)};"></span>` : '';
+        const eid = this.file.file_id || this.params.md5 || this.params.file_md5;
+        const collection = typeof getCurrentCollection === 'function' ? getCurrentCollection() : '';
+        const userSet = this.fvTagsUserSet();
         const out = [];
         const walk = (n, depth) => {
             const hasKids = n.children.length > 0;
-            const open = this.fvTagsOpen.has(n.id);
+            // A search forces every surviving branch open -- the filtered
+            // tree is already just the matches and their ancestors, so there
+            // is nothing to fold.
+            const open = query ? true : this.fvTagsOpen.has(n.id);
             const caret = hasKids
                 ? `<span class="bsim-caret" onclick="event.stopPropagation(); FileView.toggleTagsTreeNode(${escapeAttr(jsString(n.id))})">${open ? '▼' : '▶'}</span>`
                 : '<span class="bsim-caret"></span>';
             const removeClick = `FileView.removeTagInTree(event, ${jsString(n.id)})`;
             const addClick = `FileView.addTagInTree(event, ${jsString(n.id + ':')})`;
+            // A leaf's own id has its detail tail stripped for grouping, so the
+            // full stored tag (`fid:libc:2.31#memcpy`, not `fid:libc:2.31`) is
+            // read back from `tagIds`. It also doubles as the provenance-popup
+            // anchor for an analysis tag -- the popup keys off exact badge text.
+            const fullId = !hasKids ? ((n.tagIds && n.tagIds[0]) || n.id) : null;
+            const isUser = fullId && userSet.has(fullId);
+            const fullBadge = !fullId ? '' : isUser
+                ? `<span class="sim-tag-card" style="cursor:pointer; font-size:0.65rem; padding:1px 8px; margin:0 0 0 6px;"
+                        onmouseenter="showTooltip(event, ${escapeAttr(jsString(fullId))}, ${escapeAttr(jsString(collection))})"
+                        onmouseleave="hideTooltip()"
+                        oncontextmenu="handleTagContextMenu(event, ${escapeAttr(jsString(fullId))})">${escapeHtml(fullId)}</span>`
+                : `<span class="analysis-tag-badge" style="cursor:pointer; margin:0 0 0 6px;" data-eid="${escapeAttr(eid)}"
+                        title="Analysis Tag: ${escapeAttr(fullId)} (click for source)">${escapeHtml(fullId)}</span>`;
             out.push(`
             <div class="bsim-node" style="padding-left:${8 + depth * 14}px;">
                 ${caret}
                 ${dot(n.id)}
                 <span class="bsim-node-label">${escapeHtml(n.label)}</span>
                 <span class="bsim-node-count">${n.count}</span>
+                ${fullBadge}
                 <span class="bsim-side-actions">
                     <span onclick="${escapeAttr(addClick)}" title="Add a tag under ${escapeAttr(n.id)}">+</span>
                     ${n.count && !hasKids ? `<span onclick="${escapeAttr(removeClick)}" title="Remove ${escapeAttr(n.id)}">×</span>` : ''}
@@ -1391,6 +1445,11 @@ window.FileView = {
     setTagsTreeAxis(axis) {
         this.fvTagsAxis = axis;
         this.renderFileTagsTab();
+    },
+
+    setTagsQuery(q) {
+        this.fvTagsQuery = q;
+        this.fvTagsRenderTree();
     },
 
     toggleTagsTreeNode(id) {
