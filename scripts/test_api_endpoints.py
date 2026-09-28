@@ -4573,8 +4573,7 @@ def _runtime_doc(unweighted):
         "min_score": 0.0,
         "view": "sankey",
     }
-    if unweighted:
-        params["unweighted"] = "1"
+    params["unweighted"] = "1" if unweighted else "0"
     try:
         resp = requests.get(f"{BASE_URL}/api/bin_sim/diff", params=params, timeout=120)
     except Exception as exc:
