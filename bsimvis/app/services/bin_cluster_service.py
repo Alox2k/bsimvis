@@ -556,7 +556,16 @@ class BinClusterService:
             ),
         )
 
+        # ponytail: normalize here once instead of at every reader -- the
+        # incremental path hands bare md5s, the full-build path hands
+        # "{collection}:file:{md5}"; stored bare, downstream id parsing
+        # (routes/bin_cluster.py, the context-menu frontend) mistakes the
+        # md5 itself for a collection-qualified id.
+        prefix = f"{collection}:file:"
         for label, members in cluster_members.items():
+            members = [
+                m if m.startswith(prefix) else f"{prefix}{m}" for m in members
+            ]
             pipe.sadd(f"{collection}:bin_cluster:{algo_ns}:{label}:members", *members)
             pipe.sadd(
                 f"{collection}:bin_cluster:{algo_ns}:{label}:direct_members", *members

@@ -130,9 +130,16 @@
                     }
                 } else {
                     resolvedType = 'file';
-                    norm.md5 = data.id || data.md5;
+                    norm.md5 = data.file_md5 || data.md5 || (data.id ? data.id.split(':').pop() : '');
                     norm.name = data.name || data.file_name || norm.md5;
-                    norm.id = data.fileId || data.id || `${getCollectionFromHash()}:file:${norm.md5}`;
+                    // `id`/`fileId` are only trustworthy as a collection-qualified
+                    // id when they actually carry a collection (contain ':').
+                    // A bare md5 here (the incremental bin-cluster path, e.g.)
+                    // would otherwise be mistaken for "collection:md5" downstream
+                    // and turn the real collection into the md5 hash itself.
+                    const qualified = [data.fileId, data.id].find(v => v && v.includes(':'));
+                    const col = data.collection || (typeof getCollectionFromHash === 'function' ? getCollectionFromHash() : 'main');
+                    norm.id = qualified || `${col}:file:${norm.md5}`;
                 }
             } else {
                 resolvedType = type;
@@ -161,13 +168,17 @@
             }
         } else if (type === 'file') {
             resolvedType = 'file';
-            norm.md5 = data.md5 || data.id;
+            norm.md5 = data.md5 || (data.id && !data.id.includes(':') ? data.id : '') || data.id;
             // The real filename, when the caller actually knows it. A rendered
             // md5 cell does not, and the fallback below made "Copy Name" hand
             // back the hash as if it were the file's name.
             norm.fileName = data.file_name || (data.name && data.name !== norm.md5 ? data.name : '');
             norm.name = norm.fileName || norm.md5;
-            norm.id = data.fileId || data.id || `${getCollectionFromHash()}:file:${norm.md5}`;
+            // Same guard as the bin_cluster 'file' branch above: only trust
+            // id/fileId as collection-qualified when it actually has a ':'.
+            const qualifiedFileId = [data.fileId, data.id].find(v => v && v.includes(':'));
+            const fileCol = data.collection || (typeof getCollectionFromHash === 'function' ? getCollectionFromHash() : 'main');
+            norm.id = qualifiedFileId || `${fileCol}:file:${norm.md5}`;
         } else if (type === 'link' || type === 'similarity') {
             resolvedType = 'similarity';
             norm.id1 = data.id1;
