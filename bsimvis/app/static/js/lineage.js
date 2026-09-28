@@ -36,7 +36,8 @@ window.Lineage = {
         const name = node.file_name || node.file_md5;
         const label = escapeHtml(middleTruncate(name, max));
         if (!node.exists) {
-            return `<span class="lineage-missing" title="${escapeAttr(name)} — declared as a container but never uploaded">
+            return `<span class="lineage-missing" title="${escapeAttr(name)} — declared as a container but never uploaded"
+                onclick="event.stopPropagation()">
                 <i class="fa-solid fa-link-slash"></i> ${label}</span>`;
         }
         return `<b class="lineage-link" title="${escapeAttr(name)}"
