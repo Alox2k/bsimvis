@@ -69,6 +69,9 @@ else
     pip install -r requirements.txt
 fi
 
+echo "--- Fetching frontend vendor assets ---"
+./scripts/fetch_vendor_assets.sh
+
 echo "--- Installing Redis ---"
 if [ ! -f "${BIN_DIR}/redis-server" ]; then
     echo "Building Redis from source..."
