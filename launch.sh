@@ -95,6 +95,8 @@ if [ "$WORKERS_COUNT" -gt "$WORKERS_MAX_BY_RAM" ]; then
     WORKERS_COUNT=$WORKERS_MAX_BY_RAM
 fi
 ENABLE_MILVUS=${ENABLE_MILVUS:-false}
+# Run redis + kvrocks from docker-compose.yml instead of the built binaries
+DOCKER_DATASTORES=${DOCKER_DATASTORES:-false}
 DATA_BASE_DIR=${DATA_BASE_DIR:-"$(pwd)/data"}
 PROJECT_NAME=${PROJECT_NAME:-bsimvis}
 
@@ -107,8 +109,8 @@ fi
 CLEAN_SCREEN=${CLEAN_SCREEN:-$CLEAR}
 
 if [ "$CLEAN_SCREEN" = "true" ]; then
-    # Try sending clean shutdown commands first
-    if command -v redis-cli > /dev/null; then
+    # Try sending clean shutdown commands first (docker datastores are left running)
+    if [ "$DOCKER_DATASTORES" != "true" ] && command -v redis-cli > /dev/null; then
         echo "Sending shutdown commands to Redis and Kvrocks..."
         redis-cli -p "${REDIS_PORT}" shutdown 2>/dev/null || true
         redis-cli -p "${KVROCKS_PORT}" shutdown 2>/dev/null || true
@@ -119,8 +121,10 @@ if [ "$CLEAN_SCREEN" = "true" ]; then
         screen -ls | grep "${PROJECT_NAME}-" | cut -d. -f1 | awk '{print $1}' | xargs -I{} screen -X -S {} quit
         
         # Wait for ports to be freed
-        wait_for_port_free "${REDIS_PORT}" "Redis"
-        wait_for_port_free "${KVROCKS_PORT}" "Kvrocks"
+        if [ "$DOCKER_DATASTORES" != "true" ]; then
+            wait_for_port_free "${REDIS_PORT}" "Redis"
+            wait_for_port_free "${KVROCKS_PORT}" "Kvrocks"
+        fi
         if [ "$ENABLE_MILVUS" = "true" ]; then
             ETCD_PORT=${ETCD_PORT:-2379}
             MINIO_PORT=${MINIO_PORT:-9000}
@@ -134,14 +138,21 @@ fi
 export PATH="$(pwd)/bin:$PATH"
 
 # Check if core binaries exist
-REQUIRED_BINS=("redis-server" "kvrocks")
-for bin in "${REQUIRED_BINS[@]}"; do
-    if ! command -v "$bin" > /dev/null; then
-        echo "Error: Required binary '$bin' not found in PATH or bin/ directory."
-        echo "Please run ./install.sh first."
+if [ "$DOCKER_DATASTORES" = "true" ]; then
+    if ! docker compose version > /dev/null 2>&1; then
+        echo "Error: DOCKER_DATASTORES=true but 'docker compose' is not available."
         exit 1
     fi
-done
+else
+    REQUIRED_BINS=("redis-server" "kvrocks")
+    for bin in "${REQUIRED_BINS[@]}"; do
+        if ! command -v "$bin" > /dev/null; then
+            echo "Error: Required binary '$bin' not found in PATH or bin/ directory."
+            echo "Please run ./install.sh first (or set DOCKER_DATASTORES=true)."
+            exit 1
+        fi
+    done
+fi
 
 # Check Milvus binaries only if enabled
 if [ "$ENABLE_MILVUS" = "true" ]; then
@@ -166,11 +177,20 @@ if [ "$ENABLE_MILVUS" = "true" ]; then
     mkdir -p "${DATA_BASE_DIR}/minio"
 fi
 
-# Start Redis
-start_screen "${PROJECT_NAME}-redis" "redis-server --port ${REDIS_PORT} --dir ${DATA_BASE_DIR}/redis"
+if [ "$DOCKER_DATASTORES" = "true" ]; then
+    # Data dirs are created above so docker doesn't create them root-owned.
+    echo "Starting Redis and Kvrocks containers..."
+    PROJECT_NAME_DC="${PROJECT_NAME//./_}"
+    DATA_BASE_DIR="${DATA_BASE_DIR}" PROJECT_NAME="${PROJECT_NAME_DC}" DOCKER_UID="$(id -u)" DOCKER_GID="$(id -g)" \
+        docker compose -p "${PROJECT_NAME_DC,,}" up -d --wait redis kvrocks \
+        || { echo "Error: docker compose failed to start redis/kvrocks."; exit 1; }
+else
+    # Start Redis
+    start_screen "${PROJECT_NAME}-redis" "redis-server --port ${REDIS_PORT} --dir ${DATA_BASE_DIR}/redis"
 
-# Start Kvrocks
-start_screen "${PROJECT_NAME}-kvrocks" "kvrocks -c kvrocks.conf --port ${KVROCKS_PORT} --dir ${DATA_BASE_DIR}/kvrocks"
+    # Start Kvrocks
+    start_screen "${PROJECT_NAME}-kvrocks" "kvrocks -c kvrocks.conf --port ${KVROCKS_PORT} --dir ${DATA_BASE_DIR}/kvrocks"
+fi
 
 # Wait for both datastores to be ready before launching dependent services
 wait_for_port "${REDIS_PORT}" "Redis"

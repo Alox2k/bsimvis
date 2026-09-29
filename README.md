@@ -158,6 +158,12 @@ Use `--clear` to kill stale sessions before restarting:
 `launch_tmux.sh` is the tmux equivalent, and additionally caps the worker count by host
 RAM and runs each worker under a memory-limited systemd scope.
 
+On a small machine, set `DOCKER_DATASTORES=true` in `.env` before `./install.sh`: it skips
+the Redis/Kvrocks source builds, and both launch scripts start them with
+`docker compose up -d --wait redis kvrocks` instead (bound to `127.0.0.1`, data under
+`DATA_BASE_DIR`). Milvus stays opt-in via `COMPOSE_PROFILES=milvus`. Don't run the
+Docker and native Kvrocks against the same data dir at once.
+
 Services are configured via `.env` (see `.env.example`). Key variables:
 
 | Variable | Default | Description |
@@ -170,6 +176,9 @@ Services are configured via `.env` (see `.env.example`). Key variables:
 | `KVROCKS_PORT` | `6666` | Kvrocks database port |
 | `WORKERS_COUNT` | `5` | Number of background workers |
 | `DATA_BASE_DIR` | `./data` | Storage path for all service data |
+| `DOCKER_DATASTORES` | `false` | Run Redis + Kvrocks from `docker-compose.yml` instead of built binaries |
+| `KVROCKS_BLOCK_CACHE_MB` | `512` | Kvrocks block cache in the container (Docker only) |
+| `KVROCKS_MEMORY_LIMIT` | `2G` | Kvrocks container memory limit (Docker only) |
 | `ENABLE_MILVUS` | `false` | Enable optional Milvus vector DB |
 | `MILVUS_HOST` | `localhost` | Milvus host (when enabled) |
 | `MILVUS_PORT` | `19530` | Milvus gRPC port |
