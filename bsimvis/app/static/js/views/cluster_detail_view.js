@@ -851,10 +851,12 @@ window.ClusterDetailView = {
         const col = this.collection || '';
 
         members.forEach(m => {
-            const memberCol = String(m.id || '').split(':')[0] || col;
+            // A bare md5 id (flat file search) has no collection to split out.
+            const qualified = String(m.id || '').includes(':');
+            const memberCol = (qualified && String(m.id).split(':')[0]) || col;
             const md5 = m.file_md5 || '';
             const tr = document.createElement('tr');
-            tr.setAttribute('data-id', escapeAttr(m.id || md5));
+            tr.setAttribute('data-id', escapeAttr(qualified ? m.id : this.isBinary ? `${memberCol}:file:${md5}` : m.id || md5));
 
             let c1, c2, c3;
             if (this.isBinary) {
