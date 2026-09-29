@@ -62,11 +62,18 @@ const SCAN_LIST_COLS = [
         key: 'status', label: 'Status',
         get: s => s.job_status || s.status || 'queued',
         cell: s => {
-            const status = s.job_status || s.status || 'queued';
-            const color = status === 'finished' || status === 'completed' ? '#10b981'
-                : status === 'failed' ? '#f87171' : 'var(--accent)';
-            return `<span style="color:${color}; font-weight:600;">${escapeHtml(status)}</span>`
-                + (s.progress ? `<div style="color:var(--dim); font-size:0.72rem;">${escapeHtml(String(s.progress))}</div>` : '');
+            // Same badge + bar as the jobs page, and the same (i) log modal.
+            let status = s.job_status || s.status || 'pending';
+            if (status === 'queued') status = 'pending';
+            if (status === 'finished') status = 'completed';
+            const pct = status === 'completed' ? 100 : Number(s.progress) || 0;
+            const icon = { completed: 'fa-check-circle', failed: 'fa-exclamation-circle', cancelled: 'fa-ban', pending: 'fa-clock' }[status] || 'fa-circle-notch fa-spin';
+            const fill = { running: 'progress-running', completed: 'progress-completed', failed: 'progress-failed', cancelled: 'progress-failed' }[status] || '';
+            const info = s.job_id
+                ? ` <button class="job-btn-action info" onclick="event.stopPropagation(); showJobDetails(${escapeAttr(jsString(s.job_id))})" title="View Logs & Details"><i class="fa-solid fa-circle-info"></i></button>`
+                : '';
+            return `<div style="display:flex; align-items:center; gap:6px;"><span class="job-status-badge status-${escapeAttr(status)}"><i class="fa-solid ${icon}"></i> ${escapeHtml(status.toUpperCase())}</span>${info}</div>
+                <div class="job-progress-container"><div class="job-progress-track"><div class="job-progress-fill ${fill}" style="width:${pct}%"></div></div><span class="job-progress-text">${pct}%</span></div>`;
         }
     },
     {
