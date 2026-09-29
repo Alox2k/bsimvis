@@ -1088,7 +1088,10 @@ class Worker:
         elif jtype == JobType.BUILD_POOL_BIN_SIM.value:
             pool_id = payload.get("pool_id")
             return self.similarity_service.build_pool_bin_sim(
-                pool_id, job_service=self.job_service, job_id=job_id
+                pool_id,
+                payload=payload,
+                job_service=self.job_service,
+                job_id=job_id,
             )
 
         elif jtype == JobType.CLUSTER_POOL_BINARIES.value:

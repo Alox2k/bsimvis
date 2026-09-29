@@ -5997,6 +5997,32 @@ def test_pool_collection_equivalence():
             resp = requests.post(f"{BASE_URL}{path}", timeout=10)
             resp.raise_for_status()
             _wait_all([resp.json().get("job_id")], path.rsplit("/", 1)[-1])
+            if path.endswith("/build"):
+                build_job = resp.json().get("job_id")
+
+        # Fan-out: every pair has a doc, and the pipeline holds tile group + finalizer.
+        n_bins = 2
+        check(
+            "pool bin_sim: built set holds N*(N-1)/2 pairs",
+            r.scard(f"global:pool:{eq_pool}:bin_sim:built:{EQ_ALGO}")
+            == n_bins * (n_bins - 1) // 2,
+        )
+        from bsimvis.app.services.job_service import JobService
+
+        jr = JobService().r  # jobs live in Redis, not Kvrocks
+        kids = [
+            jr.hgetall(f"job:{t}")
+            for t in _json.loads(jr.hget(f"job:{build_job}", "task_ids") or "[]")
+        ]
+        check(
+            "pool bin_sim: tile group and finalizer spliced into pipeline",
+            any(k.get("type") == "group" for k in kids)
+            and any(
+                k.get("type") == "build_pool_bin_sim"
+                and _json.loads(k.get("payload", "{}")).get("finalize")
+                for k in kids
+            ),
+        )
 
         # ── Canonical map, from the single collection's cross-binary sims ──
         single_scores = r.zrange(
