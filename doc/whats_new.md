@@ -13,7 +13,7 @@ This release focuses on scan-time triage, function-similarity precision, and mai
 ## Function similarity
 * **Weighted cosine & binary cosine** : two new similarity algorithms alongside the existing BSim score, configurable per collection and pool. 
 * **Discovery of low similarity functions** : function similarity search only stores high similarity scores. However, during the matching of functions between two binaries, a discovery pass now allows matches below `similarity.min_score` . This can also now be used at runtime with different parameters and algorithms, using **Runtime Greedy Matcher**.
-* **Call graph similarity** : function diffs now also score based on call graph structure, as an extra signal alongside code similarity.
+* **Call graph similarity** : diffing view now provides matching of callers and callees between the two functions, as an extra signal alongside code similarity.
 
 ## Clustering
 * **Code/library axis split for clustering** : Identified shared library don't score and cluster with original malware code anymore. This allows analyst to focus on unidentified code. Standard library and boilerplate code were also a source of low similarity scores between different architectures. This improved similarity scores and clustering of files with different architecture dependent boilerplate code, focusing on the actual malware code for scoring. 
