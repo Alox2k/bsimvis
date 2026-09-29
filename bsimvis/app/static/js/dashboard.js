@@ -640,6 +640,9 @@ async function refreshData(appendArg = false, force = false, skipHeader = false)
     const myGen = ++_refreshGeneration;
     if (window.updateJobStatusIcon) window.updateJobStatusIcon();
     const append = (appendArg === true);
+    // A filter input's blur (from clicking a link) arms a debounced search
+    // that would navigate back after the new view opens.
+    if (!append && filterDebounceTimer) clearTimeout(filterDebounceTimer);
     const { viewKey, collection, pool, params } = getRoutingState();
 
 
