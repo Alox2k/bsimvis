@@ -86,9 +86,10 @@ APP_HOST=${APP_HOST:-0.0.0.0}
 APP_PORT=${APP_PORT:-5000}
 REDIS_PORT=${REDIS_PORT:-6379}
 KVROCKS_PORT=${KVROCKS_PORT:-6666}
-# Keep in sync with launch_tmux.sh: ~2.5 GB RSS per Ghidra JVM, 8 GB reserved
+# Keep in sync with launch_tmux.sh: ~2.5 GB RSS per Ghidra JVM, HOST_RESERVED_GB
 # for kvrocks, redis and the desktop.
-WORKERS_MAX_BY_RAM=$(awk '/MemTotal/ {m=$2/1024/1024; n=int((m-8)/2.5); print (n>1?n:1)}' /proc/meminfo)
+HOST_RESERVED_GB=${HOST_RESERVED_GB:-6}
+WORKERS_MAX_BY_RAM=$(awk -v r="$HOST_RESERVED_GB" '/MemTotal/ {m=$2/1024/1024; n=int((m-r)/2.5); print (n>1?n:1)}' /proc/meminfo)
 WORKERS_COUNT=${WORKERS_COUNT:-5}
 if [ "$WORKERS_COUNT" -gt "$WORKERS_MAX_BY_RAM" ]; then
     echo "Capping WORKERS_COUNT ${WORKERS_COUNT} -> ${WORKERS_MAX_BY_RAM} (host RAM)"

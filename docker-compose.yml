@@ -34,7 +34,7 @@ services:
       - "--pidfile"
       - "/var/lib/kvrocks/kvrocks.pid"
       - "--rocksdb.block_cache_size"
-      - "${KVROCKS_BLOCK_CACHE_MB:-512}"
+      - "${KVROCKS_BLOCK_CACHE_MB:-1024}"
       - "--rocksdb.max_background_jobs"
       - "2"
     healthcheck:
@@ -45,7 +45,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: ${KVROCKS_MEMORY_LIMIT:-2G}
+          memory: ${KVROCKS_MEMORY_LIMIT:-3G}
     restart: unless-stopped
 
   etcd:

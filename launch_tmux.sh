@@ -114,15 +114,17 @@ WORKER_MEMORY_MAX=${WORKER_MEMORY_MAX:-3G}
 
 # The fleet budget must be the SAME number the cgroup enforces. It used to be
 # hardcoded at 2.5 while the cgroup enforced 3G, so the host could be sold
-# 20% more worker memory than the kernel would ever allow -- reserve 8 GB for
-# kvrocks, redis and the desktop, then divide by the real per-worker cap.
+# 20% more worker memory than the kernel would ever allow -- reserve
+# HOST_RESERVED_GB for kvrocks, redis and the desktop, then divide by the real
+# per-worker cap. 6 GB fits a 16 GB machine; raise it for a large native kvrocks.
+HOST_RESERVED_GB=${HOST_RESERVED_GB:-6}
 WORKER_BUDGET_GB=$(awk -v v="${WORKER_MEMORY_MAX:-2.5G}" 'BEGIN {
     n = v + 0
     if (v ~ /[Mm]$/) n /= 1024
     else if (v ~ /[Kk]$/) n /= 1048576
     print (n > 0 ? n : 2.5)
 }')
-WORKERS_MAX_BY_RAM=$(awk -v b="$WORKER_BUDGET_GB" '/MemTotal/ {m=$2/1024/1024; n=int((m-8)/b); print (n>1?n:1)}' /proc/meminfo)
+WORKERS_MAX_BY_RAM=$(awk -v b="$WORKER_BUDGET_GB" -v r="$HOST_RESERVED_GB" '/MemTotal/ {m=$2/1024/1024; n=int((m-r)/b); print (n>1?n:1)}' /proc/meminfo)
 WORKERS_COUNT=${WORKERS_COUNT:-5}
 # Reserved scan-lane workers. They hold a JVM like any other worker, so they
 # come out of the same RAM budget -- cap the general fleet first, then take the
