@@ -206,18 +206,20 @@ class LLMService:
             tag_rule = (
                 f"{base_rule}\n"
                 f"Additionally, you MAY include these specific custom tags if highly relevant: {', '.join(vocabulary)}. "
-                "Example tags: severity:medium, category:crypto:cipher, custom_tag_name."
+                "Tag format: severity:<level>, category:<group>:<leaf>, custom_tag_name."
             )
         else:
             tag_rule = (
                 f"{base_rule}\n"
-                "Example tags: severity:medium, category:crypto:cipher, category:network:c2."
+                "Tag format: severity:<level>, category:<group>:<leaf>."
             )
 
         full_prompt = (
             f"{prompt}\n\nFunction Name: {function_name}\n\nCode:\n{code}\n\n"
             "Return the required severity verdict and put category/custom tags only in "
-            "the tags field, never inside summary. Keep summary under 90 words and "
+            "the tags field, never inside summary. If your summary establishes what the "
+            "function does, tags must include its category, even at severity none. "
+            "Keep summary under 90 words and "
             "include only observed behavior and decisive evidence."
         )
         custom_tags = [
@@ -289,12 +291,12 @@ class LLMService:
             tag_rule = (
                 f"{base_rule}\n"
                 f"Additionally, you MAY include these specific custom tags if highly relevant: {', '.join(vocabulary)}. "
-                "Example tags: severity:medium, category:crypto:cipher, custom_tag_name."
+                "Tag format: severity:<level>, category:<group>:<leaf>, custom_tag_name."
             )
         else:
             tag_rule = (
                 f"{base_rule}\n"
-                "Example tags: severity:medium, category:crypto:cipher, category:network:c2."
+                "Tag format: severity:<level>, category:<group>:<leaf>."
             )
 
         func_ids = [fid for fid, _, _ in members]
