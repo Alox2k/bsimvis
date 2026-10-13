@@ -426,7 +426,7 @@ def _agentic_summarize(collection, func_name, code_with_context, custom_prompt):
 
     base_prompt = custom_prompt or llm_service.default_prompt
     tag_rule = tag_taxonomy.prompt_rules() + (
-        "\nExample: TAGS: severity:medium, category:crypto:cipher."
+        "\nTag format: TAGS: severity:<level>, category:<group>:<leaf>."
     )
     system = (
         f"{base_prompt}\n\n{tag_rule}\n\n"
@@ -439,7 +439,11 @@ def _agentic_summarize(collection, func_name, code_with_context, custom_prompt):
         {"role": "system", "content": system},
         {
             "role": "user",
-            "content": f"Function Name: {func_name}\n\nCode:\n{code_with_context}",
+            "content": (
+                f"Function Name: {func_name}\n\nCode:\n{code_with_context}\n\n"
+                "If your summary establishes what the function does, TAGS must "
+                "include its category, even at severity none."
+            ),
         },
     ]
 
