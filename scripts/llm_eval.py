@@ -164,13 +164,21 @@ def score(case, summary, tags, error):
     )
     cats = [t for t in tags if t.startswith("category:")]
     any_of = case["any_of"]
-    return {
+    out = {
         "parsed": error is None and bool(summary),
         "severity": severity,
         "severity_ok": severity in case["severity"],
         "category_ok": not any_of or any(c.startswith(p) for c in cats for p in any_of),
         "forbidden": [c for c in cats if any(c.startswith(p) for p in case["forbid"])],
     }
+    # A failed call is never a pass, even where abstaining would be.
+    out["ok"] = (
+        out["parsed"]
+        and out["severity_ok"]
+        and out["category_ok"]
+        and not out["forbidden"]
+    )
+    return out
 
 
 def apply_overrides(args):
@@ -243,11 +251,7 @@ def main():
                     },
                 }
                 runs.append(result)
-                ok = (
-                    result["severity_ok"]
-                    and result["category_ok"]
-                    and not result["forbidden"]
-                )
+                ok = result["ok"]
                 print(
                     f"{'PASS' if ok else 'FAIL'} {case['name']:22} "
                     f"{'stripped' if stripped else 'named   '} "
@@ -266,9 +270,7 @@ def main():
     n = len(runs)
     if not n:
         return
-    passed = sum(
-        r["severity_ok"] and r["category_ok"] and not r["forbidden"] for r in runs
-    )
+    passed = sum(r["ok"] for r in runs)
     walls = [r["wall_s"] for r in runs if r["wall_s"] is not None]
     print(
         f"\n{passed}/{n} pass | parsed {sum(r['parsed'] for r in runs)}/{n} | "

@@ -109,6 +109,7 @@ class LLMService:
         fmt = kwargs.get("format")
         if isinstance(fmt, dict) and not cfg["think"]:
             messages = _with_schema_hint(messages, fmt)
+        _stats.last = None  # a failed call must not report the previous one
         _stats.started = time.time()
         _stats.task = task
         return Client(host=self.ollama_url).chat(
